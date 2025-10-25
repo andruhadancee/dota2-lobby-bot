@@ -89,27 +89,8 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
             lobby_data_container['data'] = lobby
             lobby_created.set()
         
-        # Переменная для отслеживания введённого кода
-        code_entered = gevent.event.Event()
-        
-        def on_lobby_message(message):
-            """Обработчик сообщений в чате лобби"""
-            try:
-                # Проверяем, содержит ли сообщение код запуска
-                if hasattr(message, 'text') and message.text:
-                    msg_text = message.text.strip().upper()
-                    local_logger.info(f"[{username}] Сообщение в чате: {msg_text}")
-                    
-                    # Если это наш код - устанавливаем флаг
-                    if msg_text == start_code.upper():
-                        local_logger.info(f"[{username}] ✅ Обнаружен код запуска!")
-                        code_entered.set()
-            except Exception as e:
-                local_logger.warning(f"[{username}] Ошибка обработки сообщения: {e}")
-        
         dota.on('ready', on_dota_ready)
         dota.on(dota.EVENT_LOBBY_NEW, on_lobby_created)
-        dota.on(dota.EVENT_LOBBY_CHANGED, on_lobby_message)  # Пытаемся отловить сообщения
         
         # 1. Вход в Steam
         local_logger.info(f"[{username}] Подключение к Steam...")
@@ -218,78 +199,53 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
             local_logger.error(f"[{username}] Таймаут создания лобби")
             result_queue.put({'success': False, 'error': 'Lobby creation timeout'})
         
-        # Вспомогательная функция для отправки сообщений в чат лобби
-        def send_lobby_message(text):
-            """Отправляет сообщение в чат лобби"""
-            try:
-                # К сожалению, dota2 API не предоставляет прямого доступа к чату лобби
-                # Вместо этого логируем сообщения для отладки
-                local_logger.info(f"[{username}] 💬 Бот хочет написать в чат: {text}")
-                # TODO: Когда API добавит поддержку - использовать dota.send_lobby_message(text)
-            except Exception as e:
-                local_logger.warning(f"[{username}] Ошибка отправки сообщения: {e}")
-        
-        # Держим процесс живым 5 минут, ожидаем код запуска
-        local_logger.info(f"[{username}] Лобби активно, ожидание кода запуска...")
-        local_logger.info(f"[{username}] 🔑 Код запуска: {start_code} (введите в чат лобби)")
-        
-        # Отправляем приветственное сообщение в чат
-        send_lobby_message(f"🤖 Бот готов! Введите код {start_code} в чат когда соберётся 10 игроков (5 vs 5)")
+        # Держим процесс живым 5 минут, автостарт при 10 игроках
+        local_logger.info(f"[{username}] 🔄 Лобби активно, автостарт при 10 игроках (5 vs 5)...")
         
         game_started = False
+        players_warned = False  # Флаг предупреждения об игроках
         
-        # Проверяем каждые 2 секунды (150 раз = 5 минут)
-        for i in range(150):
-            gevent.sleep(2)
+        # Проверяем каждые 3 секунды (100 раз = 5 минут)
+        for i in range(100):
+            gevent.sleep(3)
             
             # Проверяем команду закрытия
             if shutdown_event.is_set():
                 local_logger.info(f"[{username}] 🛑 Получена команда закрытия лобби!")
                 break
             
-            # Проверяем, был ли введён код
-            if code_entered.is_set():
-                local_logger.info(f"[{username}] 🔑 Код введён! Начинаю проверку...")
-                send_lobby_message("🔍 Начинаю проверку количества игроков...")
-                gevent.sleep(1)
-                
-                # Проверяем состояние лобби - есть ли 10 игроков (5 vs 5)
-                try:
-                    if dota.lobby and hasattr(dota.lobby, 'members'):
-                        lobby = dota.lobby
+            # Проверяем состояние лобби - есть ли 10 игроков (5 vs 5)
+            try:
+                if dota.lobby and hasattr(dota.lobby, 'members'):
+                    lobby = dota.lobby
+                    
+                    # Подсчитываем игроков в командах
+                    radiant_players = sum(1 for m in lobby.members if m.team == 0)  # 0 = Radiant
+                    dire_players = sum(1 for m in lobby.members if m.team == 1)     # 1 = Dire
+                    total_players = radiant_players + dire_players
+                    
+                    # Логируем только когда есть игроки или когда первый раз проверяем
+                    if total_players > 0 or i == 0:
+                        local_logger.info(f"[{username}] 👥 Игроков: {total_players}/10 (Radiant: {radiant_players}, Dire: {dire_players})")
+                    
+                    # Если по 5 игроков в каждой команде - АВТОСТАРТ!
+                    if radiant_players == 5 and dire_players == 5:
+                        local_logger.info(f"[{username}] ✅ 10 игроков готовы (5 vs 5)! ЗАПУСК...")
+                        gevent.sleep(2)
+                        dota.launch_practice_lobby()
+                        gevent.sleep(3)
+                        local_logger.info(f"[{username}] 🎮 Игра запущена!")
+                        game_started = True
+                        break
+                    
+                    # Если есть игроки, но не 10 - предупреждаем один раз
+                    elif total_players > 0 and not players_warned:
+                        local_logger.info(f"[{username}] ⏳ Ожидание игроков... ({total_players}/10)")
+                        players_warned = True
                         
-                        # Подсчитываем игроков в командах
-                        radiant_players = sum(1 for m in lobby.members if m.team == 0)  # 0 = Radiant
-                        dire_players = sum(1 for m in lobby.members if m.team == 1)     # 1 = Dire
-                        
-                        total_players = radiant_players + dire_players
-                        local_logger.info(f"[{username}] Игроков: Radiant={radiant_players}, Dire={dire_players}, Всего={total_players}")
-                        
-                        # Если по 5 игроков в каждой команде - запуск!
-                        if radiant_players == 5 and dire_players == 5:
-                            local_logger.info(f"[{username}] ✅ Обнаружено 10 игроков (5 vs 5)! Запуск игры...")
-                            send_lobby_message("✅ Все 10 игроков на месте! Запускаю игру... 🎮")
-                            gevent.sleep(2)
-                            dota.launch_practice_lobby()
-                            gevent.sleep(3)
-                            local_logger.info(f"[{username}] 🎮 Игра запущена!")
-                            game_started = True
-                            break
-                        else:
-                            # Недостаточно игроков
-                            local_logger.warning(f"[{username}] ❌ Недостаточно игроков: {total_players}/10")
-                            send_lobby_message(
-                                f"❌ Недостаточно игроков! В лобби {total_players}/10\n"
-                                f"Radiant: {radiant_players}/5, Dire: {dire_players}/5\n"
-                                f"Соберите 10 игроков (5 vs 5) и введите код {start_code} снова"
-                            )
-                            # Сбрасываем флаг для повторного ввода кода
-                            code_entered.clear()
-                            gevent.sleep(5)
-                except Exception as check_error:
-                    local_logger.error(f"[{username}] Ошибка проверки лобби: {check_error}")
-                    send_lobby_message(f"⚠️ Ошибка проверки. Попробуйте ввести код {start_code} снова")
-                    code_entered.clear()
+            except Exception as check_error:
+                # Не спамим логами при каждой проверке
+                pass
         
         # ВАЖНО: Явно удаляем лобби ПЕРЕД отключением (но только если игра не запущена)
         if not game_started:
@@ -1156,6 +1112,9 @@ class RealDota2BotV2:
     async def create_single_real_lobby(self, account: SteamAccount, status_msg) -> Optional[LobbyInfo]:
         """РЕАЛЬНОЕ создание лобби через Steam и Dota 2 в отдельном процессе"""
         process = None
+        result_queue = None
+        shutdown_event = None
+        
         try:
             # Генерируем данные
             lobby_name = self.get_next_lobby_name()
@@ -1226,13 +1185,6 @@ class RealDota2BotV2:
                     result = result_queue.get()
                     break
             
-            # Закрываем очередь после использования
-            try:
-                result_queue.close()
-                result_queue.join_thread()
-            except:
-                pass
-            
             # Анализируем результат
             if result and result.get('success'):
                 logger.info(f"✅ РЕАЛЬНОЕ лобби создано: {lobby_name}")
@@ -1263,9 +1215,9 @@ class RealDota2BotV2:
                 
                 # Отправляем shutdown signal и останавливаем процесс
                 if process and process.is_alive():
-                    if account.username in self.shutdown_events:
+                    if shutdown_event:
                         logger.info(f"Отправляем shutdown signal для {account.username}...")
-                        self.shutdown_events[account.username].set()
+                        shutdown_event.set()
                         process.join(timeout=10)  # Даём 10 сек на graceful shutdown
                     
                     if process.is_alive():
@@ -1294,8 +1246,8 @@ class RealDota2BotV2:
             # Останавливаем процесс
             if process and process.is_alive():
                 try:
-                    if account.username in self.shutdown_events:
-                        self.shutdown_events[account.username].set()
+                    if shutdown_event:
+                        shutdown_event.set()
                         process.join(timeout=10)
                     
                     if process.is_alive():
@@ -1315,6 +1267,15 @@ class RealDota2BotV2:
                 del self.shutdown_events[account.username]
             
             return None
+            
+        finally:
+            # ВАЖНО: Всегда закрываем result_queue для предотвращения утечек ресурсов
+            if result_queue is not None:
+                try:
+                    result_queue.close()
+                    result_queue.join_thread()
+                except Exception as cleanup_error:
+                    logger.debug(f"Ошибка очистки result_queue: {cleanup_error}")
     
     # ==================== СПИСОК ЛОББИ ====================
     
