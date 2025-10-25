@@ -295,6 +295,10 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                     dire_players = sum(1 for m in lobby.members if m.team == 1)     # 1 = Dire
                     total_players = radiant_players + dire_players
                     
+                    # ДЕБАГ: логируем состояние команд
+                    if total_players > 0 and i % 5 == 0:  # Каждые 15 секунд
+                        local_logger.info(f"[{username}] DEBUG: Radiant={radiant_players}, Dire={dire_players}, Total={total_players}/{total_required}")
+                    
                     # Проверяем готовность в зависимости от режима
                     if radiant_players == required_radiant and dire_players == required_dire:
                         if is_1v1:
