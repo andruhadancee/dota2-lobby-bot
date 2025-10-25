@@ -1344,7 +1344,7 @@ class RealDota2BotV2:
         try:
             # Генерируем данные
             if not lobby_name:
-            lobby_name = self.get_next_lobby_name()
+                lobby_name = self.get_next_lobby_name()
             if not game_mode:
                 game_mode = self.game_mode
             if not series_type:
