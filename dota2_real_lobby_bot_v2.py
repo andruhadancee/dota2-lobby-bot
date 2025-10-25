@@ -78,13 +78,15 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
         """Graceful shutdown - удаляем лобби перед выходом"""
         local_logger.info(f"[{username}] 🛑 Получен сигнал завершения, удаляем лобби...")
         try:
+            import time
             if dota_client:
                 dota_client.destroy_lobby()
-                gevent.sleep(1)
+                time.sleep(3)  # Ждём пока команда дойдёт до сервера Valve!
                 dota_client.leave_practice_lobby()
-                gevent.sleep(1)
+                time.sleep(2)
             if steam_client:
                 steam_client.disconnect()
+                time.sleep(1)
             local_logger.info(f"[{username}] ✅ Лобби удалено, выход")
         except Exception as e:
             local_logger.warning(f"[{username}] Ошибка при cleanup: {e}")
@@ -1227,8 +1229,8 @@ class RealDota2BotV2:
                         logger.info(f"Останавливаем процесс для {lobby.account} (graceful shutdown...)")
                         # Отправляем SIGTERM - процесс должен удалить лобби и выйти
                         process.terminate()
-                        # Даём 10 секунд на graceful shutdown
-                        process.join(timeout=10)
+                        # Даём 15 секунд на graceful shutdown (удаление лобби занимает время!)
+                        process.join(timeout=15)
                         
                         if process.is_alive():
                             logger.warning(f"Процесс {lobby.account} не завершился, принудительное завершение...")
