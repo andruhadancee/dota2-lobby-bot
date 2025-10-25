@@ -1303,7 +1303,7 @@ class RealDota2BotV2:
         try:
             # Генерируем данные
             if not lobby_name:
-                lobby_name = self.get_next_lobby_name()
+            lobby_name = self.get_next_lobby_name()
             if not game_mode:
                 game_mode = self.game_mode
             if not series_type:
@@ -1357,12 +1357,12 @@ class RealDota2BotV2:
             result = None
             
             while time.time() - start_time < max_wait_time:
-                await asyncio.sleep(2)
-                
+            await asyncio.sleep(2)
+            
                 # Обновляем статус каждые 10 секунд
                 elapsed = int(time.time() - start_time)
                 if elapsed % 10 == 0:
-                    await status_msg.edit_text(
+            await status_msg.edit_text(
                         f"⏳ <b>Создание реального лобби</b>\n\n"
                         f"🤖 Аккаунт: {account.username}\n"
                         f"🏷️ Название: {lobby_name}\n"
@@ -1382,22 +1382,22 @@ class RealDota2BotV2:
                 logger.info(f"✅ РЕАЛЬНОЕ лобби создано: {lobby_name}")
                 
                 # Создаем объект лобби
-                lobby_info = LobbyInfo(
-                    lobby_name=lobby_name,
-                    password=password,
-                    account=account.username,
-                    start_code=start_code
-                )
-                
-                # Сохраняем
-                self.active_lobbies[lobby_name] = lobby_info
-                account.is_busy = True
-                account.current_lobby = lobby_name
-                
+            lobby_info = LobbyInfo(
+                lobby_name=lobby_name,
+                password=password,
+                account=account.username,
+                start_code=start_code
+            )
+            
+            # Сохраняем
+            self.active_lobbies[lobby_name] = lobby_info
+            account.is_busy = True
+            account.current_lobby = lobby_name
+            
                 # Сохраняем процесс
                 self.active_processes[account.username] = process
                 
-                return lobby_info
+            return lobby_info
             else:
                 error_msg = result.get('error', 'Unknown error') if result else 'Timeout'
                 logger.error(f"❌ Не удалось создать лобби: {error_msg}")
@@ -1550,9 +1550,9 @@ class RealDota2BotV2:
             # Закрываем бота (если есть старый)
             if lobby.account in self.active_bots:
                 try:
-                    bot = self.active_bots[lobby.account]
-                    bot.destroy_lobby()
-                    bot.disconnect()
+                bot = self.active_bots[lobby.account]
+                bot.destroy_lobby()
+                bot.disconnect()
                 except:
                     pass
                 del self.active_bots[lobby.account]
@@ -2173,11 +2173,15 @@ class RealDota2BotV2:
             except Exception as e:
                 logger.error(f"Ошибка добавления задачи для матча {match.get('id')}: {e}")
         
-        # Запускаем планировщик если есть задачи
+        # Запускаем планировщик если есть задачи (только если event loop уже запущен)
         if active_matches:
             if not self.scheduler.running:
-                self.scheduler.start()
-                logger.info(f"✅ Планировщик запущен, задач: {len(active_matches)}")
+                try:
+                    self.scheduler.start()
+                    logger.info(f"✅ Планировщик запущен, задач: {len(active_matches)}")
+                except RuntimeError:
+                    # Event loop еще не запущен, планировщик запустится позже
+                    logger.info(f"📅 Планировщик будет запущен при старте event loop, задач: {len(active_matches)}")
         else:
             logger.info("📅 Нет активных матчей в расписании")
     
@@ -2287,8 +2291,16 @@ class RealDota2BotV2:
     
     # ==================== SETUP ====================
     
+    async def post_init(self, application: Application) -> None:
+        """Вызывается после инициализации Application"""
+        # Запускаем планировщик если он не запущен и есть задачи
+        if self.scheduler and not self.scheduler.running:
+            if self.scheduler.get_jobs():
+                self.scheduler.start()
+                logger.info(f"✅ Планировщик запущен в post_init, задач: {len(self.scheduler.get_jobs())}")
+    
     def setup_telegram_bot(self):
-        self.telegram_app = Application.builder().token(self.telegram_token).build()
+        self.telegram_app = Application.builder().token(self.telegram_token).post_init(self.post_init).build()
         
         # Handler создания лобби с выбором ботов, режима и серии
         create_handler = ConversationHandler(
