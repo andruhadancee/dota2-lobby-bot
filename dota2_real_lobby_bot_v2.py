@@ -149,9 +149,10 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
             'allow_cheats': False,
             'dota_tv_delay': 2,
             'fill_with_bots': False,
-            'cm_pick': 1,  # Captains Mode: подброс монетки для выбора стороны
+            'cm_pick': 1,  # Captains Mode: подброс монетки для выбора стороны (право первого выбора)
             'radiant_series_wins': 0,
             'dire_series_wins': 0,
+            'leagueid': 0,  # 0 = без лиги, можно указать ID турнира если есть доступ
         }
         
         # Создаем PRACTICE лобби (автоматически закрывается при отключении!)
@@ -163,16 +164,16 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
         
         # Ждем создания лобби (макс 60 сек)
         local_logger.info(f"[{username}] Ожидание создания лобби...")
-        gevent.sleep(5)
+        gevent.sleep(2)  # Уменьшено с 5 до 2 секунд
         
-        if lobby_created.wait(timeout=55):
+        if lobby_created.wait(timeout=58):
             local_logger.info(f"[{username}] Лобби создано! Применяем настройки...")
             
             # ВАЖНО: Применяем настройки к созданному лобби
             try:
                 dota.config_practice_lobby(options=options)
                 local_logger.info(f"[{username}] Настройки применены")
-                gevent.sleep(2)
+                gevent.sleep(1)  # Уменьшено с 2 до 1 секунды
             except Exception as e:
                 local_logger.warning(f"[{username}] Ошибка применения настроек: {e}")
             
@@ -633,6 +634,9 @@ class RealDota2BotV2:
                 await self.handle_close_lobby(query, lobby_name)
             elif data == "destroy_all_lobbies":
                 await self.handle_destroy_all_lobbies(query)
+            elif data.startswith("cancel_creation_"):
+                username = data.replace("cancel_creation_", "")
+                await self.handle_cancel_creation(query, username)
         except Exception as e:
             logger.error(f"Ошибка обработки {data}: {e}", exc_info=True)
             try:
@@ -1072,14 +1076,18 @@ class RealDota2BotV2:
             password = self.generate_password()
             start_code = self.generate_start_code()
             
-            # Обновляем статус
+            # Обновляем статус с кнопкой отмены
+            cancel_keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("❌ Отменить создание", callback_data=f"cancel_creation_{account.username}")
+            ]])
             await status_msg.edit_text(
                 f"⏳ <b>Создание реального лобби</b>\n\n"
                 f"🤖 Аккаунт: {account.username}\n"
                 f"🏷️ Название: {lobby_name}\n"
                 f"🔐 Пароль: {password}\n\n"
                 f"⏱️ Запуск Steam...",
-                parse_mode='HTML'
+                parse_mode='HTML',
+                reply_markup=cancel_keyboard
             )
             
             # Создаем очередь для результата и event для shutdown
@@ -1122,7 +1130,8 @@ class RealDota2BotV2:
                         f"🏷️ Название: {lobby_name}\n"
                         f"🔐 Пароль: {password}\n\n"
                         f"⏱️ Прошло {elapsed} сек...",
-                        parse_mode='HTML'
+                        parse_mode='HTML',
+                        reply_markup=cancel_keyboard
                     )
                 
                 # Проверяем очередь
@@ -1430,6 +1439,52 @@ class RealDota2BotV2:
             parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("◀️ Назад", callback_data="manage_bots")
+            ]])
+        )
+    
+    async def handle_cancel_creation(self, query, username: str):
+        """Отмена создания лобби"""
+        await query.answer("🛑 Отменяем создание...", show_alert=True)
+        
+        # Отправляем shutdown signal процессу
+        if username in self.shutdown_events:
+            logger.info(f"Отмена создания лобби для {username}")
+            self.shutdown_events[username].set()
+            
+            # Останавливаем процесс
+            if username in self.active_processes:
+                process = self.active_processes[username]
+                try:
+                    if process.is_alive():
+                        process.join(timeout=10)
+                        if process.is_alive():
+                            process.terminate()
+                            process.join(timeout=2)
+                        if process.is_alive():
+                            process.kill()
+                            process.join(timeout=2)
+                except Exception as e:
+                    logger.error(f"Ошибка остановки процесса при отмене: {e}")
+                finally:
+                    if username in self.active_processes:
+                        del self.active_processes[username]
+                    if username in self.shutdown_events:
+                        del self.shutdown_events[username]
+            
+            # Освобождаем аккаунт
+            for account in self.steam_accounts:
+                if account.username == username:
+                    account.is_busy = False
+                    account.current_lobby = None
+                    account.bot_instance = None
+                    break
+        
+        # Возвращаемся в главное меню
+        await query.edit_message_text(
+            "❌ <b>Создание лобби отменено</b>",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("◀️ Назад", callback_data="back_main")
             ]])
         )
     
