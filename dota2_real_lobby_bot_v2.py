@@ -83,14 +83,50 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
         
         def on_dota_ready():
             local_logger.info(f"[{username}] Dota 2 готов")
+            # Логируем все доступные события для отладки
+            local_logger.info(f"[{username}] Доступные события dota: {dir(dota)}")
         
         def on_lobby_created(lobby):
             local_logger.info(f"[{username}] Лобби создано!")
             lobby_data_container['data'] = lobby
             lobby_created.set()
         
+        def on_chat_message(*args, **kwargs):
+            """Пытаемся отловить сообщения чата"""
+            local_logger.info(f"[{username}] 💬 CHAT MESSAGE! args={args}, kwargs={kwargs}")
+        
+        def on_lobby_message(*args, **kwargs):
+            """Пытаемся отловить сообщения лобби"""
+            local_logger.info(f"[{username}] 💬 LOBBY MESSAGE! args={args}, kwargs={kwargs}")
+        
+        def on_any_event(event_name, *args, **kwargs):
+            """Ловим ВСЕ события"""
+            if 'chat' in event_name.lower() or 'message' in event_name.lower():
+                local_logger.info(f"[{username}] 🔔 EVENT: {event_name}, args={args}, kwargs={kwargs}")
+        
+        # Подписываемся на события
         dota.on('ready', on_dota_ready)
         dota.on(dota.EVENT_LOBBY_NEW, on_lobby_created)
+        
+        # Пытаемся подписаться на различные события чата
+        try:
+            dota.on('chat_message', on_chat_message)
+            local_logger.info(f"[{username}] ✅ Подписка на 'chat_message'")
+        except:
+            pass
+        
+        try:
+            dota.on('lobby_message', on_lobby_message)
+            local_logger.info(f"[{username}] ✅ Подписка на 'lobby_message'")
+        except:
+            pass
+        
+        try:
+            if hasattr(dota, 'EVENT_CHAT_MESSAGE'):
+                dota.on(dota.EVENT_CHAT_MESSAGE, on_chat_message)
+                local_logger.info(f"[{username}] ✅ Подписка на EVENT_CHAT_MESSAGE")
+        except:
+            pass
         
         # 1. Вход в Steam
         local_logger.info(f"[{username}] Подключение к Steam...")
@@ -1298,7 +1334,8 @@ class RealDota2BotV2:
             message += f"✅ <b>{idx}. {lobby_name}</b>\n"
             message += f"🔒 Пароль: <code>{lobby.password}</code>\n"
             message += f"🔑 Код: <code>{lobby.start_code}</code>\n"
-            message += f"🤖 Бот: {lobby.account}\n\n"
+            message += f"🤖 Бот: {lobby.account}\n"
+            message += f"👥 Игроков: {lobby.players_count}/10\n\n"
             
             keyboard.append([
                 InlineKeyboardButton(f"❌ Закрыть {idx}", callback_data=f"close_lobby_{lobby_name}")
