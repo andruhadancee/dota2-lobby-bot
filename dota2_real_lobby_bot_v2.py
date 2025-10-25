@@ -276,6 +276,15 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
         game_started = False
         players_warned = False  # Флаг предупреждения об игроках
         
+        # Подписываемся на изменения лобби для отладки
+        lobby_event_count = 0
+        def on_lobby_event(message):
+            nonlocal lobby_event_count
+            lobby_event_count += 1
+            local_logger.info(f"[{username}] 🔔 EVENT_LOBBY_CHANGED #{lobby_event_count}")
+        
+        dota.on('lobby_changed', on_lobby_event)
+        
         # Проверяем каждые 3 секунды (100 раз = 5 минут)
         for i in range(100):
             gevent.sleep(3)
@@ -287,6 +296,14 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
             
             # Проверяем состояние лобби
             try:
+                # ДЕБАГ: проверяем есть ли вообще лобби
+                if i == 0 or i % 10 == 0:  # Каждые 30 секунд
+                    local_logger.info(f"[{username}] 🔍 DEBUG: dota.lobby={'exists' if dota.lobby else 'None'}")
+                    if dota.lobby:
+                        local_logger.info(f"[{username}] 🔍 DEBUG: hasattr members={hasattr(dota.lobby, 'members')}")
+                        if hasattr(dota.lobby, 'members'):
+                            local_logger.info(f"[{username}] 🔍 DEBUG: len(members)={len(dota.lobby.members)}")
+                
                 if dota.lobby and hasattr(dota.lobby, 'members'):
                     lobby = dota.lobby
                     
@@ -1327,7 +1344,7 @@ class RealDota2BotV2:
         try:
             # Генерируем данные
             if not lobby_name:
-                lobby_name = self.get_next_lobby_name()
+            lobby_name = self.get_next_lobby_name()
             if not game_mode:
                 game_mode = self.game_mode
             if not series_type:
@@ -1379,12 +1396,12 @@ class RealDota2BotV2:
             result = None
             
             while time.time() - start_time < max_wait_time:
-                await asyncio.sleep(2)
-                
+            await asyncio.sleep(2)
+            
                 # Обновляем статус каждые 10 секунд
                 elapsed = int(time.time() - start_time)
                 if elapsed % 10 == 0:
-                    await status_msg.edit_text(
+            await status_msg.edit_text(
                         f"⏳ <b>Создание реального лобби</b>\n\n"
                         f"🤖 Аккаунт: {account.username}\n"
                         f"🏷️ Название: {lobby_name}\n"
@@ -1404,21 +1421,21 @@ class RealDota2BotV2:
                 logger.info(f"✅ РЕАЛЬНОЕ лобби создано: {lobby_name}")
                 
                 # Создаем объект лобби
-                lobby_info = LobbyInfo(
-                    lobby_name=lobby_name,
-                    password=password,
-                    account=account.username,
-                )
-                
-                # Сохраняем
-                self.active_lobbies[lobby_name] = lobby_info
-                account.is_busy = True
-                account.current_lobby = lobby_name
-                
+            lobby_info = LobbyInfo(
+                lobby_name=lobby_name,
+                password=password,
+                account=account.username,
+            )
+            
+            # Сохраняем
+            self.active_lobbies[lobby_name] = lobby_info
+            account.is_busy = True
+            account.current_lobby = lobby_name
+            
                 # Сохраняем процесс
                 self.active_processes[account.username] = process
                 
-                return lobby_info
+            return lobby_info
             else:
                 error_msg = result.get('error', 'Unknown error') if result else 'Timeout'
                 logger.error(f"❌ Не удалось создать лобби: {error_msg}")
@@ -1570,9 +1587,9 @@ class RealDota2BotV2:
             # Закрываем бота (если есть старый)
             if lobby.account in self.active_bots:
                 try:
-                    bot = self.active_bots[lobby.account]
-                    bot.destroy_lobby()
-                    bot.disconnect()
+                bot = self.active_bots[lobby.account]
+                bot.destroy_lobby()
+                bot.disconnect()
                 except:
                     pass
                 del self.active_bots[lobby.account]
