@@ -64,13 +64,13 @@ logger = logging.getLogger(__name__)
 
 def steam_worker_process(username: str, password: str, lobby_name: str, 
                          lobby_password: str, server: str, mode: str, series_type: str,
-                         result_queue: Queue, shutdown_event, start_code: str):
+                         result_queue: Queue, shutdown_event):
     """
     Функция для запуска в отдельном процессе.
     Выполняет вход в Steam, запуск Dota 2 и создание лобби.
     shutdown_event - для корректного удаления лобби перед выходом.
-    start_code - код для автозапуска игры (не используется пока, т.к. нет доступа к чату)
     series_type - тип серии: "bo1", "bo2", "bo3", "bo5"
+    Автозапуск при 10 игроках (5 vs 5).
     """
     # НЕ используем monkey.patch_all() - это вызывает RecursionError
     # gevent работает и без этого в отдельном процессе
@@ -504,11 +504,10 @@ class SteamAccount:
 
 class LobbyInfo:
     """Информация о лобби"""
-    def __init__(self, lobby_name: str, password: str, account: str, start_code: str):
+    def __init__(self, lobby_name: str, password: str, account: str):
         self.lobby_name = lobby_name  # "wb cup 1", "wb cup 2"
         self.password = password
         self.account = account
-        self.start_code = start_code
         self.created_at = datetime.now()
         self.players_count = 0
         self.status = "active"
@@ -763,6 +762,8 @@ class RealDota2BotV2:
                 return await self.handle_select_bots_menu(update, context)
             elif data == "schedule":
                 await self.handle_schedule(query)
+            elif data == "match_view_active":
+                await self.handle_view_active_matches(query)
             elif data.startswith("schedule_"):
                 await self.handle_schedule_action(query, data)
             elif data.startswith("match_"):
@@ -1219,7 +1220,6 @@ class RealDota2BotV2:
         for idx, lobby in enumerate(created_lobbies, 1):
             message += f"<b>{idx}. {lobby.lobby_name}</b>\n"
             message += f"🔒 Пароль: <code>{lobby.password}</code>\n"
-            message += f"🔑 Код: <code>{lobby.start_code}</code>\n"
             message += f"🤖 Бот: {lobby.account}\n\n"
         
         message += "<b>🎮 Лобби созданы в игре!</b>\n"
@@ -1310,7 +1310,6 @@ class RealDota2BotV2:
                 series_type = "bo1"  # По умолчанию одна игра
             
             password = self.generate_password()
-            start_code = self.generate_start_code()
             
             # Обновляем статус с кнопкой отмены
             cancel_keyboard = InlineKeyboardMarkup([[
@@ -1343,7 +1342,6 @@ class RealDota2BotV2:
                     series_type,  # Серия игр
                     result_queue,
                     shutdown_event,
-                    start_code  # Передаём код запуска для автостарта
                 )
             )
             process.start()
@@ -1386,7 +1384,6 @@ class RealDota2BotV2:
                 lobby_name=lobby_name,
                 password=password,
                 account=account.username,
-                start_code=start_code
             )
             
             # Сохраняем
@@ -1489,7 +1486,6 @@ class RealDota2BotV2:
         for idx, (lobby_name, lobby) in enumerate(self.active_lobbies.items(), 1):
             message += f"✅ <b>{idx}. {lobby_name}</b>\n"
             message += f"🔒 Пароль: <code>{lobby.password}</code>\n"
-            message += f"🔑 Код: <code>{lobby.start_code}</code>\n"
             message += f"🤖 Бот: {lobby.account}\n"
             message += f"👥 Игроков: {lobby.players_count}/10\n\n"
             
@@ -1753,8 +1749,12 @@ class RealDota2BotV2:
     
     async def handle_schedule(self, query):
         """Меню управления расписанием матчей"""
-        matches = self.schedule_config.get('matches', [])
+        all_matches = self.schedule_config.get('matches', [])
         is_enabled = self.schedule_config.get('enabled', False)
+        
+        # Разделяем на запланированные и активные
+        scheduled_matches = [m for m in all_matches if m.get('status') == 'scheduled']
+        active_matches = [m for m in all_matches if m.get('status') == 'active']
         
         message = f"""
 <b>📅 Расписание матчей</b>
@@ -1762,12 +1762,14 @@ class RealDota2BotV2:
 <b>Статус:</b> {'🟢 Включено' if is_enabled else '🔴 Выключено'}
 <b>Часовой пояс:</b> {self.schedule_config.get('timezone', 'Europe/Moscow')}
 
-<b>📋 Матчей:</b> {len(matches)}
+<b>📋 Запланировано:</b> {len(scheduled_matches)}
+<b>🎮 Активных:</b> {len(active_matches)}
 """
         
-        if matches:
-            message += "\n"
-            for idx, match in enumerate(matches, 1):
+        # Показываем запланированные матчи
+        if scheduled_matches:
+            message += "\n<b>📋 Предстоящие матчи:</b>\n"
+            for idx, match in enumerate(scheduled_matches, 1):
                 status_emoji = "✅" if match.get('enabled', False) else "⏸️"
                 team1 = match.get('team1', '???')
                 team2 = match.get('team2', '???')
@@ -1786,7 +1788,12 @@ class RealDota2BotV2:
             InlineKeyboardButton("➕ Добавить матч", callback_data="match_add")
         ])
         
-        if matches:
+        if active_matches:
+            keyboard.append([
+                InlineKeyboardButton(f"🎮 Активные матчи ({len(active_matches)})", callback_data="match_view_active")
+            ])
+        
+        if all_matches:
             keyboard.append([
                 InlineKeyboardButton("✏️ Редактировать", callback_data="match_edit_menu"),
                 InlineKeyboardButton("🗑️ Удалить всё", callback_data="match_delete_all")
@@ -1802,6 +1809,43 @@ class RealDota2BotV2:
             message,
             parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    
+    async def handle_view_active_matches(self, query):
+        """Отображение активных матчей"""
+        all_matches = self.schedule_config.get('matches', [])
+        active_matches = [m for m in all_matches if m.get('status') == 'active']
+        
+        if not active_matches:
+            await query.answer("Нет активных матчей", show_alert=True)
+            return
+        
+        message = "<b>🎮 Активные матчи:</b>\n\n"
+        
+        for idx, match in enumerate(active_matches, 1):
+            team1 = match.get('team1', '???')
+            team2 = match.get('team2', '???')
+            series = match.get('series_type', 'bo1').upper()
+            mode = match.get('game_mode', 'CM')
+            lobby_name = f"{team1} vs {team2}"
+            
+            message += f"<b>{idx}. {lobby_name}</b>\n"
+            message += f"🎯 {series} | 🎮 {mode}\n"
+            
+            # Ищем информацию о лобби, если оно создано
+            if lobby_name in self.active_lobbies:
+                lobby = self.active_lobbies[lobby_name]
+                message += f"🔒 Пароль: <code>{lobby.password}</code>\n"
+                message += f"👥 Игроков: {lobby.players_count}/10\n"
+            
+            message += "\n"
+        
+        await query.edit_message_text(
+            message,
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("◀️ Назад", callback_data="schedule")
+            ]])
         )
     
     async def handle_schedule_action(self, query, data: str):
@@ -2057,7 +2101,8 @@ class RealDota2BotV2:
                 'time': time_str,
                 'game_mode': game_mode,
                 'series_type': series_type,
-                'enabled': True
+                'enabled': True,
+                'status': 'scheduled'
             }
             
             if 'matches' not in self.schedule_config:
@@ -2245,15 +2290,16 @@ class RealDota2BotV2:
             if lobby_info:
                 logger.info(f"✅ Лобби создано по расписанию: {lobby_name}")
                 
+                # Меняем статус матча на "active"
+                match['status'] = 'active'
+                self.save_schedule()
+                
                 # Отправляем уведомление
                 if self.notification_chat_id:
-                    message = f"✅ <b>Лобби создано по расписанию!</b>\n\n"
-                    message += f"<b>{lobby_name}</b>\n"
+                    message = f"<b>{lobby_name}</b>\n\n"
                     message += f"🔒 Пароль: <code>{lobby_info.password}</code>\n"
-                    message += f"🔑 Код: <code>{lobby_info.start_code}</code>\n"
                     message += f"🎮 Режим: {game_mode}\n"
-                    message += f"🎯 Серия: {series_type.upper()}\n"
-                    message += f"🤖 Бот: {account.username}"
+                    message += f"🎯 Серия: {series_type.upper()}"
                     
                     send_kwargs = {
                         'chat_id': self.notification_chat_id,
