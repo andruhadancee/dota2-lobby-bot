@@ -69,46 +69,12 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
     logging.basicConfig(level=logging.INFO)
     local_logger = logging.getLogger(f"steam_worker_{username}")
     
-    # Глобальные переменные для graceful shutdown
-    shutdown_requested = threading.Event()
-    steam_client = None
-    dota_client = None
-    
-    def cleanup_and_exit(signum=None, frame=None):
-        """Graceful shutdown - удаляем лобби перед выходом"""
-        local_logger.info(f"[{username}] 🛑 Получен сигнал завершения, удаляем лобби...")
-        try:
-            import time
-            if dota_client:
-                dota_client.destroy_lobby()
-                time.sleep(3)  # Ждём пока команда дойдёт до сервера Valve!
-                dota_client.leave_practice_lobby()
-                time.sleep(2)
-            if steam_client:
-                steam_client.disconnect()
-                time.sleep(1)
-            local_logger.info(f"[{username}] ✅ Лобби удалено, выход")
-        except Exception as e:
-            local_logger.warning(f"[{username}] Ошибка при cleanup: {e}")
-        finally:
-            import sys
-            sys.exit(0)
-    
-    # Регистрируем обработчик сигнала SIGTERM
-    import signal
-    signal.signal(signal.SIGTERM, cleanup_and_exit)
-    signal.signal(signal.SIGINT, cleanup_and_exit)
-    
     try:
         local_logger.info(f"[{username}] Процесс запущен")
         
         # Создаем Steam клиент
         steam = SteamClient()
         dota = Dota2Client(steam)
-        
-        # Сохраняем в глобальные переменные для cleanup
-        steam_client = steam
-        dota_client = dota
         
         lobby_created = threading.Event()
         lobby_data_container = {'data': None}
@@ -141,6 +107,15 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
         
         # Ждем подключения к координатору (макс 60 сек)
         gevent.sleep(10)  # Даем время на подключение
+        
+        # ВАЖНО: Сначала удаляем любое старое лобби (если есть)
+        local_logger.info(f"[{username}] Проверка и удаление старых лобби...")
+        try:
+            dota.destroy_lobby()
+            gevent.sleep(2)  # Даём время на удаление
+            local_logger.info(f"[{username}] Старое лобби удалено (если было)")
+        except Exception as e:
+            local_logger.info(f"[{username}] Старых лобби нет или ошибка удаления: {e}")
         
         # 3. Создание лобби
         local_logger.info(f"[{username}] Создание лобби: {lobby_name}")
@@ -225,17 +200,13 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
         local_logger.info(f"[{username}] Лобби активно, держим 5 минут...")
         gevent.sleep(300)
         
-        # Перед завершением - УДАЛЯЕМ ЛОББИ
-        local_logger.info(f"[{username}] Время вышло, удаляем лобби...")
+        # Practice lobby автоматически закрывается при отключении!
+        local_logger.info(f"[{username}] Время вышло, отключаемся от Steam...")
         try:
-            dota.destroy_lobby()  # УДАЛЯЕМ лобби (не просто выходим!)
-            gevent.sleep(2)
-            dota.leave_practice_lobby()
-            gevent.sleep(1)
             steam.disconnect()
-            local_logger.info(f"[{username}] Лобби удалено, отключились от Steam")
+            local_logger.info(f"[{username}] Отключились от Steam, лобби закроется автоматически")
         except Exception as cleanup_error:
-            local_logger.warning(f"[{username}] Ошибка при очистке: {cleanup_error}")
+            local_logger.warning(f"[{username}] Ошибка при отключении: {cleanup_error}")
         
     except Exception as e:
         local_logger.error(f"[{username}] Ошибка: {e}", exc_info=True)
@@ -1226,15 +1197,14 @@ class RealDota2BotV2:
                 process = self.active_processes[lobby.account]
                 try:
                     if process.is_alive():
-                        logger.info(f"Останавливаем процесс для {lobby.account} (graceful shutdown...)")
-                        # Отправляем SIGTERM - процесс должен удалить лобби и выйти
+                        logger.info(f"Останавливаем процесс для {lobby.account}")
+                        # Practice lobby автоматически закрывается при отключении
                         process.terminate()
-                        # Даём 15 секунд на graceful shutdown (удаление лобби занимает время!)
-                        process.join(timeout=15)
+                        process.join(timeout=3)
                         
                         if process.is_alive():
-                            logger.warning(f"Процесс {lobby.account} не завершился, принудительное завершение...")
-                            process.kill()  # SIGKILL
+                            logger.warning(f"Процесс не остановился, убиваем принудительно...")
+                            process.kill()
                             process.join(timeout=2)
                         
                         # Дополнительно убиваем все дочерние процессы (если остались)
