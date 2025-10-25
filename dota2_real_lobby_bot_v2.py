@@ -70,7 +70,9 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
     Выполняет вход в Steam, запуск Dota 2 и создание лобби.
     shutdown_event - для корректного удаления лобби перед выходом.
     series_type - тип серии: "bo1", "bo2", "bo3", "bo5"
-    Автозапуск при 10 игроках (5 vs 5).
+    Автозапуск:
+      - 1v1 Solo Mid: при 2 игроках (1 vs 1)
+      - Остальные режимы: при 10 игроках (5 vs 5)
     """
     # НЕ используем monkey.patch_all() - это вызывает RecursionError
     # gevent работает и без этого в отдельном процессе
@@ -260,8 +262,16 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
             local_logger.error(f"[{username}] Таймаут создания лобби")
             result_queue.put({'success': False, 'error': 'Lobby creation timeout'})
         
-        # Держим процесс живым 5 минут, автостарт при 10 игроках
-        local_logger.info(f"[{username}] 🔄 Лобби активно, автостарт при 10 игроках (5 vs 5)...")
+        # Держим процесс живым 5 минут, автостарт в зависимости от режима
+        is_1v1 = (mode == '1v1 Solo Mid')
+        required_radiant = 1 if is_1v1 else 5
+        required_dire = 1 if is_1v1 else 5
+        total_required = required_radiant + required_dire
+        
+        if is_1v1:
+            local_logger.info(f"[{username}] 🔄 Лобби активно, автостарт при 2 игроках (1 vs 1)...")
+        else:
+            local_logger.info(f"[{username}] 🔄 Лобби активно, автостарт при 10 игроках (5 vs 5)...")
         
         game_started = False
         players_warned = False  # Флаг предупреждения об игроках
@@ -275,7 +285,7 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                 local_logger.info(f"[{username}] 🛑 Получена команда закрытия лобби!")
                 break
             
-            # Проверяем состояние лобби - есть ли 10 игроков (5 vs 5)
+            # Проверяем состояние лобби
             try:
                 if dota.lobby and hasattr(dota.lobby, 'members'):
                     lobby = dota.lobby
@@ -285,9 +295,13 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                     dire_players = sum(1 for m in lobby.members if m.team == 1)     # 1 = Dire
                     total_players = radiant_players + dire_players
                     
-                    # Если по 5 игроков в каждой команде - АВТОСТАРТ!
-                    if radiant_players == 5 and dire_players == 5:
-                        local_logger.info(f"[{username}] ✅ 10 игроков готовы (5 vs 5)! ЗАПУСК...")
+                    # Проверяем готовность в зависимости от режима
+                    if radiant_players == required_radiant and dire_players == required_dire:
+                        if is_1v1:
+                            local_logger.info(f"[{username}] ✅ 2 игрока готовы (1 vs 1)! ЗАПУСК...")
+                        else:
+                            local_logger.info(f"[{username}] ✅ 10 игроков готовы (5 vs 5)! ЗАПУСК...")
+                        
                         gevent.sleep(2)
                         dota.launch_practice_lobby()
                         gevent.sleep(3)
@@ -295,9 +309,9 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                         game_started = True
                         break
                     
-                    # Если есть игроки, но не 10 - предупреждаем один раз
+                    # Если есть игроки, но не нужное количество - предупреждаем один раз
                     elif total_players > 0 and not players_warned:
-                        local_logger.info(f"[{username}] ⏳ Ожидание игроков... ({total_players}/10)")
+                        local_logger.info(f"[{username}] ⏳ Ожидание игроков... ({total_players}/{total_required})")
                         players_warned = True
                         
             except Exception as check_error:
