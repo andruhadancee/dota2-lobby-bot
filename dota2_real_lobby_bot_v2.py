@@ -766,7 +766,7 @@ class RealDota2BotV2:
             elif data.startswith("schedule_"):
                 await self.handle_schedule_action(query, data)
             elif data.startswith("match_"):
-                return await self.handle_match_action(update, context, query, data)
+                return await self.handle_match_action(update, context)
             elif data == "settings":
                 await self.handle_settings(query)
             elif data == "status":

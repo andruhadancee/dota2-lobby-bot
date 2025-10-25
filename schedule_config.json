@@ -1,36 +1,5 @@
 {
   "enabled": false,
   "timezone": "Europe/Moscow",
-  "matches": [
-    {
-      "id": 1,
-      "team1": "team zxc",
-      "team2": "team asd",
-      "date": "26.10.2025",
-      "time": "18:00",
-      "series_type": "bo2",
-      "game_mode": "Captains Mode",
-      "enabled": true
-    },
-    {
-      "id": 2,
-      "team1": "team 123",
-      "team2": "team 321",
-      "date": "26.10.2025",
-      "time": "18:00",
-      "series_type": "bo2",
-      "game_mode": "Captains Mode",
-      "enabled": true
-    },
-    {
-      "id": 3,
-      "team1": "team 444",
-      "team2": "team 555",
-      "date": "27.10.2025",
-      "time": "20:00",
-      "series_type": "bo2",
-      "game_mode": "Captains Mode",
-      "enabled": true
-    }
-  ]
+  "matches": []
 }
