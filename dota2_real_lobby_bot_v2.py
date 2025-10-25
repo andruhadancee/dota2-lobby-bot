@@ -56,17 +56,21 @@ logger = logging.getLogger(__name__)
 # Состояния
 (WAITING_LOBBY_COUNT, WAITING_ACCOUNT_DATA, WAITING_START_CODE, 
  WAITING_LOBBY_NAME, WAITING_SELECT_BOTS, WAITING_EDIT_BOT_DATA,
- WAITING_DELETE_CONFIRM) = range(7)
+ WAITING_DELETE_CONFIRM, WAITING_GAME_MODE, WAITING_SERIES_TYPE,
+ WAITING_MATCH_TEAM1, WAITING_MATCH_TEAM2, WAITING_MATCH_DATE,
+ WAITING_MATCH_TIME, WAITING_MATCH_BO, WAITING_MATCH_GAME_MODE,
+ WAITING_MATCH_SERIES) = range(15)
 
 
 def steam_worker_process(username: str, password: str, lobby_name: str, 
-                         lobby_password: str, server: str, mode: str, 
+                         lobby_password: str, server: str, mode: str, series_type: str,
                          result_queue: Queue, shutdown_event, start_code: str):
     """
     Функция для запуска в отдельном процессе.
     Выполняет вход в Steam, запуск Dota 2 и создание лобби.
     shutdown_event - для корректного удаления лобби перед выходом.
     start_code - код для автозапуска игры (не используется пока, т.к. нет доступа к чату)
+    series_type - тип серии: "bo1", "bo2", "bo3", "bo5"
     """
     # НЕ используем monkey.patch_all() - это вызывает RecursionError
     # gevent работает и без этого в отдельном процессе
@@ -176,12 +180,24 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
         mode_mapping = {
             'Captains Mode': DOTA_GameMode.DOTA_GAMEMODE_CM,
             'All Pick': DOTA_GameMode.DOTA_GAMEMODE_AP,
+            'Captains Draft': DOTA_GameMode.DOTA_GAMEMODE_CD,
+            'Mid Only': DOTA_GameMode.DOTA_GAMEMODE_MO,
+            '1v1 Solo Mid': DOTA_GameMode.DOTA_GAMEMODE_1V1MID,
             'Random Draft': DOTA_GameMode.DOTA_GAMEMODE_RD,
             'Single Draft': DOTA_GameMode.DOTA_GAMEMODE_SD,
         }
         
+        # Маппинг серий игр
+        series_mapping = {
+            'bo1': 0,  # Best of 1 (одна игра)
+            'bo2': 1,  # Best of 2 (две игры)
+            'bo3': 2,  # Best of 3 (до 2 побед)
+            'bo5': 3,  # Best of 5 (до 3 побед)
+        }
+        
         server_region = server_mapping.get(server, EServerRegion.Europe)
         game_mode = mode_mapping.get(mode, DOTA_GameMode.DOTA_GAMEMODE_CM)
+        series_value = series_mapping.get(series_type.lower(), 0)
         
         # Настройки лобби с League ID турнира
         options = {
@@ -189,6 +205,7 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
             'pass_key': lobby_password,
             'server_region': server_region,
             'game_mode': game_mode,
+            'series_type': series_value,  # Серия игр (bo1, bo2, bo3, bo5)
             'allow_spectating': False,
             'allow_cheats': False,
             'dota_tv_delay': 2,
@@ -236,7 +253,8 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                 'password': lobby_password,
                 'account': username,
                 'server': server,
-                'mode': mode
+                'mode': mode,
+                'series_type': series_type
             })
         else:
             local_logger.error(f"[{username}] Таймаут создания лобби")
@@ -570,7 +588,7 @@ class RealDota2BotV2:
             logger.info("✅ Все старые процессы убиты!")
         except Exception as e:
             logger.warning(f"Ошибка очистки процессов: {e}")
-    
+        
     def load_accounts(self):
         try:
             if os.path.exists('steam_accounts.json'):
@@ -639,6 +657,10 @@ class RealDota2BotV2:
             with open('schedule_config.json', 'w', encoding='utf-8') as f:
                 json.dump(self.schedule_config, f, ensure_ascii=False, indent=2)
             logger.info("💾 Расписание сохранено")
+            
+            # Перезапускаем планировщик если бот уже запущен
+            if hasattr(self, 'telegram_app') and self.telegram_app is not None:
+                self.setup_scheduler()
         except Exception as e:
             logger.error(f"Ошибка сохранения расписания: {e}")
     
@@ -743,6 +765,8 @@ class RealDota2BotV2:
                 await self.handle_schedule(query)
             elif data.startswith("schedule_"):
                 await self.handle_schedule_action(query, data)
+            elif data.startswith("match_"):
+                return await self.handle_match_action(update, context, query, data)
             elif data == "settings":
                 await self.handle_settings(query)
             elif data == "status":
@@ -1086,7 +1110,7 @@ class RealDota2BotV2:
         await self.handle_select_bots_menu(update, context)
     
     async def handle_confirm_bot_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Подтверждение выбора и создание лобби"""
+        """Подтверждение выбора ботов и переход к выбору режима игры"""
         query = update.callback_query
         selected = context.user_data.get('selected_bots', [])
         
@@ -1096,8 +1120,72 @@ class RealDota2BotV2:
         
         count = len(selected)
         
+        # Переход к выбору режима игры
+        keyboard = [
+            [InlineKeyboardButton("⚔️ Captains Mode", callback_data="mode_Captains Mode")],
+            [InlineKeyboardButton("🎲 All Pick", callback_data="mode_All Pick")],
+            [InlineKeyboardButton("📋 Captains Draft", callback_data="mode_Captains Draft")],
+            [InlineKeyboardButton("🎯 Mid Only", callback_data="mode_Mid Only")],
+            [InlineKeyboardButton("🥊 1v1 Solo Mid", callback_data="mode_1v1 Solo Mid")],
+            [InlineKeyboardButton("◀️ Назад", callback_data="select_bots")]
+        ]
+        
+        await query.edit_message_text(
+            f"<b>🎮 Выбор режима игры</b>\n\n"
+            f"Выбрано ботов: <b>{count}</b>\n\n"
+            f"Выберите режим игры:",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        
+        return WAITING_GAME_MODE
+    
+    async def handle_game_mode_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка выбора режима игры и переход к выбору серии"""
+        query = update.callback_query
+        
+        # Извлекаем режим из callback_data
+        game_mode = query.data.replace("mode_", "")
+        context.user_data['game_mode'] = game_mode
+        
+        count = len(context.user_data.get('selected_bots', []))
+        
+        # Переход к выбору серии игр
+        keyboard = [
+            [InlineKeyboardButton("1️⃣ Одна игра (BO1)", callback_data="series_bo1")],
+            [InlineKeyboardButton("2️⃣ Две игры (BO2)", callback_data="series_bo2")],
+            [InlineKeyboardButton("3️⃣ До 2 побед (BO3)", callback_data="series_bo3")],
+            [InlineKeyboardButton("5️⃣ До 3 побед (BO5)", callback_data="series_bo5")],
+            [InlineKeyboardButton("◀️ Назад", callback_data="confirm_bot_selection")]
+        ]
+        
+        await query.edit_message_text(
+            f"<b>🎯 Выбор серии игр</b>\n\n"
+            f"Ботов: <b>{count}</b>\n"
+            f"Режим: <b>{game_mode}</b>\n\n"
+            f"Выберите тип серии:",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        
+        return WAITING_SERIES_TYPE
+    
+    async def handle_series_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка выбора серии и создание лобби"""
+        query = update.callback_query
+        
+        # Извлекаем серию из callback_data
+        series_type = query.data.replace("series_", "")
+        context.user_data['series_type'] = series_type
+        
+        selected = context.user_data.get('selected_bots', [])
+        game_mode = context.user_data.get('game_mode')
+        count = len(selected)
+        
         status_msg = await query.edit_message_text(
             f"⏳ <b>Создаю {count} лобби...</b>\n\n"
+            f"🎮 Режим: {game_mode}\n"
+            f"🎯 Серия: {series_type.upper()}\n\n"
             f"🔄 Подключение к Steam и запуск Dota 2...\n"
             f"<i>Это может занять 1-2 минуты</i>",
             parse_mode='HTML'
@@ -1109,7 +1197,9 @@ class RealDota2BotV2:
         created_lobbies = await self.create_multiple_real_lobbies_from_accounts(
             selected_accounts,
             status_msg,
-            context
+            context,
+            game_mode=game_mode,
+            series_type=series_type
         )
         
         if not created_lobbies:
@@ -1123,6 +1213,8 @@ class RealDota2BotV2:
         
         # Результат
         message = f"✅ <b>Создано {len(created_lobbies)} лобби!</b>\n\n"
+        message += f"🎮 Режим: <b>{game_mode}</b>\n"
+        message += f"🎯 Серия: <b>{series_type.upper()}</b>\n\n"
         
         for idx, lobby in enumerate(created_lobbies, 1):
             message += f"<b>{idx}. {lobby.lobby_name}</b>\n"
@@ -1162,7 +1254,9 @@ class RealDota2BotV2:
         self,
         accounts: List[SteamAccount],
         status_msg,
-        context
+        context,
+        game_mode: str = None,
+        series_type: str = None
     ) -> List[LobbyInfo]:
         """Создание лобби из выбранных аккаунтов"""
         created = []
@@ -1178,7 +1272,12 @@ class RealDota2BotV2:
                 )
                 
                 account.is_busy = True
-                lobby_info = await self.create_single_real_lobby(account, status_msg)
+                lobby_info = await self.create_single_real_lobby(
+                    account, 
+                    status_msg,
+                    game_mode=game_mode,
+                    series_type=series_type
+                )
                 
                 if lobby_info:
                     created.append(lobby_info)
@@ -1193,7 +1292,9 @@ class RealDota2BotV2:
         
         return created
     
-    async def create_single_real_lobby(self, account: SteamAccount, status_msg) -> Optional[LobbyInfo]:
+    async def create_single_real_lobby(self, account: SteamAccount, status_msg, 
+                                       game_mode: str = None, series_type: str = None, 
+                                       lobby_name: str = None) -> Optional[LobbyInfo]:
         """РЕАЛЬНОЕ создание лобби через Steam и Dota 2 в отдельном процессе"""
         process = None
         result_queue = None
@@ -1201,7 +1302,13 @@ class RealDota2BotV2:
         
         try:
             # Генерируем данные
-            lobby_name = self.get_next_lobby_name()
+            if not lobby_name:
+                lobby_name = self.get_next_lobby_name()
+            if not game_mode:
+                game_mode = self.game_mode
+            if not series_type:
+                series_type = "bo1"  # По умолчанию одна игра
+            
             password = self.generate_password()
             start_code = self.generate_start_code()
             
@@ -1232,7 +1339,8 @@ class RealDota2BotV2:
                     lobby_name,
                     password,
                     self.server_region,
-                    self.game_mode,
+                    game_mode,  # Режим игры
+                    series_type,  # Серия игр
                     result_queue,
                     shutdown_event,
                     start_code  # Передаём код запуска для автостарта
@@ -1644,44 +1752,45 @@ class RealDota2BotV2:
         )
     
     async def handle_schedule(self, query):
-        """Меню управления расписанием"""
-        schedules = self.schedule_config.get('schedules', [])
+        """Меню управления расписанием матчей"""
+        matches = self.schedule_config.get('matches', [])
         is_enabled = self.schedule_config.get('enabled', False)
         
         message = f"""
-<b>📅 Автоматическое расписание</b>
+<b>📅 Расписание матчей</b>
 
 <b>Статус:</b> {'🟢 Включено' if is_enabled else '🔴 Выключено'}
 <b>Часовой пояс:</b> {self.schedule_config.get('timezone', 'Europe/Moscow')}
 
-<b>📋 Расписаний:</b> {len(schedules)}
+<b>📋 Матчей:</b> {len(matches)}
 """
+        
+        if matches:
+            message += "\n"
+            for idx, match in enumerate(matches, 1):
+                status_emoji = "✅" if match.get('enabled', False) else "⏸️"
+                team1 = match.get('team1', '???')
+                team2 = match.get('team2', '???')
+                date = match.get('date', '???.??.????')
+                time_str = match.get('time', '??:??')
+                series = match.get('series_type', 'bo1').upper()
+                mode = match.get('game_mode', 'CM')
+                
+                message += f"{status_emoji} <b>{idx}.</b> {team1} vs {team2}\n"
+                message += f"     📅 {date} ⏰ {time_str} 🎯 {series} 🎮 {mode}\n"
         
         keyboard = []
         
-        # Список расписаний
-        for idx, schedule in enumerate(schedules, 1):
-            status_emoji = "✅" if schedule.get('enabled', False) else "⏸️"
-            day = schedule.get('day_of_week', 'unknown')
-            time_str = schedule.get('time', '00:00')
-            count = schedule.get('lobby_count', 0)
-            name = schedule.get('name', f'Расписание {idx}')
-            
-            message += f"\n{status_emoji} <b>{idx}.</b> {name}\n"
-            message += f"   📅 {day.capitalize()} в {time_str}\n"
-            message += f"   🎮 Лобби: {count}\n"
-            
-            keyboard.append([
-                InlineKeyboardButton(f"✏️ {idx}", callback_data=f"schedule_edit_{schedule.get('id', idx)}"),
-                InlineKeyboardButton(f"{'⏸️' if schedule.get('enabled') else '▶️'} {idx}", 
-                                   callback_data=f"schedule_toggle_{schedule.get('id', idx)}"),
-                InlineKeyboardButton(f"🗑️ {idx}", callback_data=f"schedule_delete_{schedule.get('id', idx)}")
-            ])
-        
         # Кнопки управления
         keyboard.append([
-            InlineKeyboardButton("➕ Добавить расписание", callback_data="schedule_add")
+            InlineKeyboardButton("➕ Добавить матч", callback_data="match_add")
         ])
+        
+        if matches:
+            keyboard.append([
+                InlineKeyboardButton("✏️ Редактировать", callback_data="match_edit_menu"),
+                InlineKeyboardButton("🗑️ Удалить всё", callback_data="match_delete_all")
+            ])
         
         keyboard.append([
             InlineKeyboardButton(f"{'🔴 Выключить' if is_enabled else '🟢 Включить'}", 
@@ -1696,50 +1805,272 @@ class RealDota2BotV2:
         )
     
     async def handle_schedule_action(self, query, data: str):
-        """Обработка действий с расписанием"""
+        """Обработка действий с расписанием (только переключатель)"""
         if data == "schedule_toggle_global":
             # Включить/выключить всё расписание
             self.schedule_config['enabled'] = not self.schedule_config.get('enabled', False)
             self.save_schedule()
+            
+            # Перезапускаем планировщик
+            self.setup_scheduler()
+            
             await query.answer(
                 f"✅ Расписание {'включено' if self.schedule_config['enabled'] else 'выключено'}!",
                 show_alert=True
             )
             await self.handle_schedule(query)
+    
+    async def handle_match_action(self, update: Update, context: ContextTypes.DEFAULT_TYPE, query, data: str):
+        """Обработка действий с матчами"""
+        if data == "match_add":
+            # Начало добавления матча
+            await query.edit_message_text(
+                "<b>➕ Добавление матча</b>\n\n"
+                "Введите название первой команды:\n"
+                "<i>Например: team zxc</i>",
+                parse_mode='HTML'
+            )
+            return WAITING_MATCH_TEAM1
         
-        elif data == "schedule_add":
-            # TODO: Добавить новое расписание (пока заглушка)
-            await query.answer("⚠️ Функция в разработке! Используй файл schedule_config.json", show_alert=True)
-        
-        elif data.startswith("schedule_toggle_"):
-            # Включить/выключить конкретное расписание
-            schedule_id = int(data.replace("schedule_toggle_", ""))
-            schedules = self.schedule_config.get('schedules', [])
-            for schedule in schedules:
-                if schedule.get('id') == schedule_id:
-                    schedule['enabled'] = not schedule.get('enabled', False)
-                    self.save_schedule()
-                    await query.answer(
-                        f"✅ Расписание {'включено' if schedule['enabled'] else 'выключено'}!",
-                        show_alert=True
-                    )
-                    break
-            await self.handle_schedule(query)
-        
-        elif data.startswith("schedule_delete_"):
-            # Удалить расписание
-            schedule_id = int(data.replace("schedule_delete_", ""))
-            self.schedule_config['schedules'] = [
-                s for s in self.schedule_config.get('schedules', []) 
-                if s.get('id') != schedule_id
-            ]
+        elif data == "match_delete_all":
+            # Удалить все матчи
+            self.schedule_config['matches'] = []
             self.save_schedule()
-            await query.answer("✅ Расписание удалено!", show_alert=True)
+            await query.answer("✅ Все матчи удалены!", show_alert=True)
             await self.handle_schedule(query)
         
-        elif data.startswith("schedule_edit_"):
-            # TODO: Редактирование (пока заглушка)
-            await query.answer("⚠️ Функция в разработке! Используй файл schedule_config.json", show_alert=True)
+        elif data == "match_edit_menu":
+            # Меню редактирования - показываем список матчей
+            matches = self.schedule_config.get('matches', [])
+            
+            message = "<b>✏️ Редактирование матчей</b>\n\nВыберите матч:\n\n"
+            keyboard = []
+            
+            for idx, match in enumerate(matches, 1):
+                team1 = match.get('team1', '???')
+                team2 = match.get('team2', '???')
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"{idx}. {team1} vs {team2}",
+                        callback_data=f"match_edit_{match['id']}"
+                    )
+                ])
+            
+            keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="schedule")])
+            
+            await query.edit_message_text(
+                message,
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        
+        elif data.startswith("match_edit_"):
+            # Редактирование конкретного матча
+            match_id = int(data.replace("match_edit_", ""))
+            context.user_data['editing_match_id'] = match_id
+            
+            matches = self.schedule_config.get('matches', [])
+            match = next((m for m in matches if m.get('id') == match_id), None)
+            
+            if match:
+                message = f"""
+<b>✏️ Редактирование матча</b>
+
+<b>Текущие данные:</b>
+Команда 1: {match.get('team1')}
+Команда 2: {match.get('team2')}
+Дата: {match.get('date')}
+Время: {match.get('time')}
+Серия: {match.get('series_type', 'bo1').upper()}
+Режим: {match.get('game_mode', 'Captains Mode')}
+
+Введите название первой команды:
+"""
+                await query.edit_message_text(message, parse_mode='HTML')
+                return WAITING_MATCH_TEAM1
+    
+    async def handle_match_team1_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Ввод названия первой команды"""
+        team1 = update.message.text.strip()
+        context.user_data['match_team1'] = team1
+        
+        await update.message.reply_text(
+            f"<b>✅ Команда 1:</b> {team1}\n\n"
+            f"Введите название второй команды:\n"
+            f"<i>Например: team asd</i>",
+            parse_mode='HTML'
+        )
+        return WAITING_MATCH_TEAM2
+    
+    async def handle_match_team2_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Ввод названия второй команды"""
+        team2 = update.message.text.strip()
+        context.user_data['match_team2'] = team2
+        
+        team1 = context.user_data.get('match_team1', '???')
+        
+        await update.message.reply_text(
+            f"<b>✅ Команда 1:</b> {team1}\n"
+            f"<b>✅ Команда 2:</b> {team2}\n\n"
+            f"Введите дату матча:\n"
+            f"<i>Формат: ДД.ММ.ГГГГ\nНапример: 26.10.2025</i>",
+            parse_mode='HTML'
+        )
+        return WAITING_MATCH_DATE
+    
+    async def handle_match_date_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Ввод даты матча"""
+        date_str = update.message.text.strip()
+        
+        # Простая проверка формата
+        import re
+        if not re.match(r'^\d{2}\.\d{2}\.\d{4}$', date_str):
+            await update.message.reply_text(
+                "❌ Неверный формат даты!\n\n"
+                "Используйте: <b>ДД.ММ.ГГГГ</b>\n"
+                "Например: <b>26.10.2025</b>",
+                parse_mode='HTML'
+            )
+            return WAITING_MATCH_DATE
+        
+        context.user_data['match_date'] = date_str
+        
+        await update.message.reply_text(
+            f"<b>✅ Дата:</b> {date_str}\n\n"
+            f"Введите время матча:\n"
+            f"<i>Формат: ЧЧ:ММ\nНапример: 18:00</i>",
+            parse_mode='HTML'
+        )
+        return WAITING_MATCH_TIME
+    
+    async def handle_match_time_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Ввод времени матча"""
+        time_str = update.message.text.strip()
+        
+        # Простая проверка формата
+        import re
+        if not re.match(r'^\d{1,2}:\d{2}$', time_str):
+            await update.message.reply_text(
+                "❌ Неверный формат времени!\n\n"
+                "Используйте: <b>ЧЧ:ММ</b>\n"
+                "Например: <b>18:00</b>",
+                parse_mode='HTML'
+            )
+            return WAITING_MATCH_TIME
+        
+        context.user_data['match_time'] = time_str
+        
+        # Переход к выбору режима игры
+        keyboard = [
+            [InlineKeyboardButton("⚔️ Captains Mode", callback_data="match_mode_Captains Mode")],
+            [InlineKeyboardButton("🎲 All Pick", callback_data="match_mode_All Pick")],
+            [InlineKeyboardButton("📋 Captains Draft", callback_data="match_mode_Captains Draft")],
+            [InlineKeyboardButton("🎯 Mid Only", callback_data="match_mode_Mid Only")],
+            [InlineKeyboardButton("🥊 1v1 Solo Mid", callback_data="match_mode_1v1 Solo Mid")],
+        ]
+        
+        await update.message.reply_text(
+            f"<b>✅ Время:</b> {time_str}\n\n"
+            f"Выберите режим игры:",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return WAITING_MATCH_GAME_MODE
+    
+    async def handle_match_mode_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Выбор режима игры для матча"""
+        query = update.callback_query
+        game_mode = query.data.replace("match_mode_", "")
+        context.user_data['match_game_mode'] = game_mode
+        
+        # Переход к выбору серии
+        keyboard = [
+            [InlineKeyboardButton("1️⃣ Одна игра (BO1)", callback_data="match_series_bo1")],
+            [InlineKeyboardButton("2️⃣ Две игры (BO2)", callback_data="match_series_bo2")],
+            [InlineKeyboardButton("3️⃣ До 2 побед (BO3)", callback_data="match_series_bo3")],
+            [InlineKeyboardButton("5️⃣ До 3 побед (BO5)", callback_data="match_series_bo5")],
+        ]
+        
+        await query.edit_message_text(
+            f"<b>✅ Режим:</b> {game_mode}\n\n"
+            f"Выберите тип серии:",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return WAITING_MATCH_SERIES
+    
+    async def handle_match_series_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Выбор серии для матча и сохранение"""
+        query = update.callback_query
+        series_type = query.data.replace("match_series_", "")
+        context.user_data['match_series_type'] = series_type
+        
+        # Собираем все данные
+        team1 = context.user_data.get('match_team1')
+        team2 = context.user_data.get('match_team2')
+        date = context.user_data.get('match_date')
+        time_str = context.user_data.get('match_time')
+        game_mode = context.user_data.get('match_game_mode')
+        
+        # Проверяем, редактируем или создаём
+        editing_match_id = context.user_data.get('editing_match_id')
+        
+        if editing_match_id:
+            # Редактирование существующего матча
+            matches = self.schedule_config.get('matches', [])
+            for match in matches:
+                if match.get('id') == editing_match_id:
+                    match['team1'] = team1
+                    match['team2'] = team2
+                    match['date'] = date
+                    match['time'] = time_str
+                    match['game_mode'] = game_mode
+                    match['series_type'] = series_type
+                    break
+            
+            del context.user_data['editing_match_id']
+            message = "✅ <b>Матч обновлён!</b>\n\n"
+        else:
+            # Создание нового матча
+            new_id = max([m.get('id', 0) for m in self.schedule_config.get('matches', [])], default=0) + 1
+            
+            new_match = {
+                'id': new_id,
+                'team1': team1,
+                'team2': team2,
+                'date': date,
+                'time': time_str,
+                'game_mode': game_mode,
+                'series_type': series_type,
+                'enabled': True
+            }
+            
+            if 'matches' not in self.schedule_config:
+                self.schedule_config['matches'] = []
+            
+            self.schedule_config['matches'].append(new_match)
+            message = "✅ <b>Матч добавлен!</b>\n\n"
+        
+        self.save_schedule()
+        
+        message += f"<b>{team1} vs {team2}</b>\n"
+        message += f"📅 {date} ⏰ {time_str}\n"
+        message += f"🎮 {game_mode}\n"
+        message += f"🎯 {series_type.upper()}"
+        
+        await query.edit_message_text(
+            message,
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("◀️ К расписанию", callback_data="schedule")
+            ]])
+        )
+        
+        # Очищаем временные данные
+        for key in ['match_team1', 'match_team2', 'match_date', 'match_time', 'match_game_mode', 'match_series_type']:
+            context.user_data.pop(key, None)
+        
+        return ConversationHandler.END
     
     async def handle_status(self, query):
         total = len(self.steam_accounts)
@@ -1780,18 +2111,183 @@ class RealDota2BotV2:
         await update.message.reply_text("❌ Отменено", reply_markup=self.get_main_keyboard())
         return ConversationHandler.END
     
+    # ==================== ПЛАНИРОВЩИК ====================
+    
+    def setup_scheduler(self):
+        """Настройка планировщика для автоматического создания лобби"""
+        if self.scheduler is None:
+            from apscheduler.schedulers.asyncio import AsyncIOScheduler
+            self.scheduler = AsyncIOScheduler(timezone=self.schedule_config.get('timezone', 'Europe/Moscow'))
+        
+        # Очищаем старые задачи
+        self.scheduler.remove_all_jobs()
+        
+        # Если расписание выключено - не добавляем задачи
+        if not self.schedule_config.get('enabled', False):
+            logger.info("📅 Расписание выключено, задачи не добавлены")
+            return
+        
+        # Добавляем задачи для каждого активного матча
+        matches = self.schedule_config.get('matches', [])
+        active_matches = [m for m in matches if m.get('enabled', False)]
+        
+        for match in active_matches:
+            try:
+                # Парсим дату и время
+                date_str = match.get('date')  # "26.10.2025"
+                time_str = match.get('time')  # "18:00"
+                
+                day, month, year = map(int, date_str.split('.'))
+                hour, minute = map(int, time_str.split(':'))
+                
+                # Создаем задачу на конкретную дату и время
+                run_date = datetime(year, month, day, hour, minute)
+                
+                # Добавляем задачу
+                self.scheduler.add_job(
+                    self.execute_scheduled_match,
+                    'date',
+                    run_date=run_date,
+                    args=[match],
+                    id=f"match_{match['id']}",
+                    replace_existing=True
+                )
+                
+                logger.info(f"📅 Добавлена задача: {match['team1']} vs {match['team2']} на {date_str} {time_str}")
+            
+            except Exception as e:
+                logger.error(f"Ошибка добавления задачи для матча {match.get('id')}: {e}")
+        
+        # Запускаем планировщик если есть задачи
+        if active_matches:
+            if not self.scheduler.running:
+                self.scheduler.start()
+                logger.info(f"✅ Планировщик запущен, задач: {len(active_matches)}")
+        else:
+            logger.info("📅 Нет активных матчей в расписании")
+    
+    async def execute_scheduled_match(self, match: dict):
+        """Выполнение создания лобби для запланированного матча"""
+        try:
+            team1 = match.get('team1')
+            team2 = match.get('team2')
+            game_mode = match.get('game_mode', 'Captains Mode')
+            series_type = match.get('series_type', 'bo1')
+            
+            lobby_name = f"{team1} vs {team2}"
+            
+            logger.info(f"🎮 Создание лобби по расписанию: {lobby_name}")
+            
+            # Ищем свободный аккаунт
+            available_accounts = self.get_available_accounts()
+            
+            if not available_accounts:
+                logger.error(f"❌ Нет свободных аккаунтов для создания лобби: {lobby_name}")
+                
+                # Отправляем уведомление в Telegram
+                if self.notification_chat_id:
+                    message = f"❌ <b>Ошибка создания лобби по расписанию!</b>\n\n"
+                    message += f"<b>{lobby_name}</b>\n"
+                    message += f"Причина: нет свободных аккаунтов"
+                    
+                    send_kwargs = {
+                        'chat_id': self.notification_chat_id,
+                        'text': message,
+                        'parse_mode': 'HTML'
+                    }
+                    
+                    if self.notification_thread_id:
+                        send_kwargs['message_thread_id'] = self.notification_thread_id
+                    
+                    await self.telegram_app.bot.send_message(**send_kwargs)
+                
+                return
+            
+            # Берем первый свободный аккаунт
+            account = available_accounts[0]
+            account.is_busy = True
+            
+            # Создаем фейковый status_msg для create_single_real_lobby
+            class FakeMessage:
+                async def edit_text(self, *args, **kwargs):
+                    pass
+            
+            fake_msg = FakeMessage()
+            
+            # Создаем лобби
+            lobby_info = await self.create_single_real_lobby(
+                account,
+                fake_msg,
+                game_mode=game_mode,
+                series_type=series_type,
+                lobby_name=lobby_name
+            )
+            
+            if lobby_info:
+                logger.info(f"✅ Лобби создано по расписанию: {lobby_name}")
+                
+                # Отправляем уведомление
+                if self.notification_chat_id:
+                    message = f"✅ <b>Лобби создано по расписанию!</b>\n\n"
+                    message += f"<b>{lobby_name}</b>\n"
+                    message += f"🔒 Пароль: <code>{lobby_info.password}</code>\n"
+                    message += f"🔑 Код: <code>{lobby_info.start_code}</code>\n"
+                    message += f"🎮 Режим: {game_mode}\n"
+                    message += f"🎯 Серия: {series_type.upper()}\n"
+                    message += f"🤖 Бот: {account.username}"
+                    
+                    send_kwargs = {
+                        'chat_id': self.notification_chat_id,
+                        'text': message,
+                        'parse_mode': 'HTML'
+                    }
+                    
+                    if self.notification_thread_id:
+                        send_kwargs['message_thread_id'] = self.notification_thread_id
+                    
+                    await self.telegram_app.bot.send_message(**send_kwargs)
+            else:
+                logger.error(f"❌ Не удалось создать лобби по расписанию: {lobby_name}")
+                account.is_busy = False
+                
+                # Отправляем уведомление об ошибке
+                if self.notification_chat_id:
+                    message = f"❌ <b>Ошибка создания лобби по расписанию!</b>\n\n"
+                    message += f"<b>{lobby_name}</b>\n"
+                    message += f"Проверьте логи для деталей"
+                    
+                    send_kwargs = {
+                        'chat_id': self.notification_chat_id,
+                        'text': message,
+                        'parse_mode': 'HTML'
+                    }
+                    
+                    if self.notification_thread_id:
+                        send_kwargs['message_thread_id'] = self.notification_thread_id
+                    
+                    await self.telegram_app.bot.send_message(**send_kwargs)
+        
+        except Exception as e:
+            logger.error(f"Ошибка выполнения запланированного матча: {e}", exc_info=True)
+    
     # ==================== SETUP ====================
     
     def setup_telegram_bot(self):
         self.telegram_app = Application.builder().token(self.telegram_token).build()
         
-        # Handler создания лобби с выбором ботов
+        # Handler создания лобби с выбором ботов, режима и серии
         create_handler = ConversationHandler(
             entry_points=[CallbackQueryHandler(self.handle_create_lobby_request, pattern="^create_lobby$")],
             states={
                 WAITING_SELECT_BOTS: [
                     CallbackQueryHandler(self.handle_toggle_bot_selection, pattern="^toggle_bot_"),
                     CallbackQueryHandler(self.handle_confirm_bot_selection, pattern="^confirm_bot_selection$"),
+                ],
+                WAITING_GAME_MODE: [
+                    CallbackQueryHandler(self.handle_game_mode_selection, pattern="^mode_"),
+                ],
+                WAITING_SERIES_TYPE: [
+                    CallbackQueryHandler(self.handle_series_selection, pattern="^series_"),
                 ],
             },
             fallbacks=[CommandHandler('cancel', self.cancel)],
@@ -1818,10 +2314,29 @@ class RealDota2BotV2:
             allow_reentry=True
         )
         
+        # Handler управления матчами (добавление и редактирование)
+        match_handler = ConversationHandler(
+            entry_points=[
+                CallbackQueryHandler(self.handle_match_action, pattern="^match_add$"),
+                CallbackQueryHandler(self.handle_match_action, pattern="^match_edit_"),
+            ],
+            states={
+                WAITING_MATCH_TEAM1: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_match_team1_input)],
+                WAITING_MATCH_TEAM2: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_match_team2_input)],
+                WAITING_MATCH_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_match_date_input)],
+                WAITING_MATCH_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_match_time_input)],
+                WAITING_MATCH_GAME_MODE: [CallbackQueryHandler(self.handle_match_mode_selection, pattern="^match_mode_")],
+                WAITING_MATCH_SERIES: [CallbackQueryHandler(self.handle_match_series_selection, pattern="^match_series_")],
+            },
+            fallbacks=[CommandHandler('cancel', self.cancel)],
+            allow_reentry=True
+        )
+        
         self.telegram_app.add_handler(CommandHandler("start", self.cmd_start))
         self.telegram_app.add_handler(create_handler)
         self.telegram_app.add_handler(add_bot_handler)
         self.telegram_app.add_handler(edit_bot_handler)
+        self.telegram_app.add_handler(match_handler)
         self.telegram_app.add_handler(CallbackQueryHandler(self.button_callback))
     
     def start_sync(self):
@@ -1835,6 +2350,7 @@ class RealDota2BotV2:
         
         logger.info("Настройка...")
         self.setup_telegram_bot()
+        self.setup_scheduler()
         
         logger.info(f"Аккаунтов: {len(self.steam_accounts)}")
         logger.info("✅ Бот запущен!")
