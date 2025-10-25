@@ -973,8 +973,8 @@ class RealDota2BotV2:
         query = update.callback_query
         await query.edit_message_text(
             "<b>➕ Добавление аккаунта</b>\n\n"
-            "Формат: <code>логин пароль</code>\n\n"
-            "Пример: <code>mylogin123 mypass456</code>",
+            "<b>Формат:</b> <code>логин пароль</code>\n\n"
+            "<b>Пример:</b> <code>mylogin123 mypass456</code>",
             parse_mode='HTML'
         )
         return WAITING_ACCOUNT_DATA
@@ -1820,9 +1820,24 @@ class RealDota2BotV2:
             )
             await self.handle_schedule(query)
     
-    async def handle_match_action(self, update: Update, context: ContextTypes.DEFAULT_TYPE, query, data: str):
+    async def handle_match_action(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка действий с матчами"""
+        query = update.callback_query
+        data = query.data
+        
         if data == "match_add":
+            # Проверяем лимит матчей
+            matches = self.schedule_config.get('matches', [])
+            total_accounts = len(self.steam_accounts)
+            
+            if len(matches) >= total_accounts:
+                await query.answer(
+                    f"❌ Нельзя добавить больше {total_accounts} матчей!\n"
+                    f"У вас только {total_accounts} аккаунтов Steam.\n"
+                    f"Добавьте ещё аккаунты через 'Управление ботами'",
+                    show_alert=True
+                )
+                return
             # Начало добавления матча
             await query.edit_message_text(
                 "<b>➕ Добавление матча</b>\n\n"
