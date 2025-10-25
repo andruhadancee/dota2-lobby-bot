@@ -58,11 +58,12 @@ logger = logging.getLogger(__name__)
 
 def steam_worker_process(username: str, password: str, lobby_name: str, 
                          lobby_password: str, server: str, mode: str, 
-                         result_queue: Queue, shutdown_event):
+                         result_queue: Queue, shutdown_event, start_code: str):
     """
     Функция для запуска в отдельном процессе.
     Выполняет вход в Steam, запуск Dota 2 и создание лобби.
     shutdown_event - для корректного удаления лобби перед выходом.
+    start_code - код для автозапуска игры (не используется пока, т.к. нет доступа к чату)
     """
     # НЕ используем monkey.patch_all() - это вызывает RecursionError
     # gevent работает и без этого в отдельном процессе
@@ -152,13 +153,13 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
             'cm_pick': 1,  # Captains Mode: подброс монетки для выбора стороны (право первого выбора)
             'radiant_series_wins': 0,
             'dire_series_wins': 0,
-            'leagueid': 0,  # 0 = без лиги, можно указать ID турнира если есть доступ
         }
         
-        # Создаем PRACTICE лобби (автоматически закрывается при отключении!)
-        local_logger.info(f"[{username}] Создание лобби...")
-        dota.create_practice_lobby(
+        # Создаем TOURNAMENT лобби с League ID 18390
+        local_logger.info(f"[{username}] Создание турнирного лобби (League ID: 18390)...")
+        dota.create_tournament_lobby(
             password=lobby_password,
+            tournament_id=18390,  # ID турнира в Dota 2
             options=options
         )
         
@@ -198,24 +199,54 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
             local_logger.error(f"[{username}] Таймаут создания лобби")
             result_queue.put({'success': False, 'error': 'Lobby creation timeout'})
         
-        # Держим процесс живым 5 минут, проверяем shutdown_event каждые 5 секунд
-        local_logger.info(f"[{username}] Лобби активно, ожидание команды закрытия...")
+        # Держим процесс живым 5 минут, проверяем shutdown_event и состояние лобби каждые 5 секунд
+        local_logger.info(f"[{username}] Лобби активно, ожидание 10 игроков или команды закрытия...")
+        local_logger.info(f"[{username}] 🔑 Код запуска: {start_code} (введите в чат лобби)")
         
-        # Проверяем shutdown_event каждые 5 секунд (60 раз = 5 минут)
+        game_started = False
+        
+        # Проверяем каждые 5 секунд (60 раз = 5 минут)
         for i in range(60):
             gevent.sleep(5)
+            
+            # Проверяем команду закрытия
             if shutdown_event.is_set():
                 local_logger.info(f"[{username}] 🛑 Получена команда закрытия лобби!")
                 break
+            
+            # Проверяем состояние лобби - есть ли 10 игроков (5 vs 5)
+            try:
+                if dota.current_lobby:
+                    lobby = dota.current_lobby
+                    
+                    # Подсчитываем игроков в командах
+                    radiant_players = sum(1 for m in lobby.members if m.team == 0)  # 0 = Radiant
+                    dire_players = sum(1 for m in lobby.members if m.team == 1)     # 1 = Dire
+                    
+                    local_logger.info(f"[{username}] Игроков: Radiant={radiant_players}, Dire={dire_players}")
+                    
+                    # Если по 5 игроков в каждой команде - автостарт!
+                    if radiant_players == 5 and dire_players == 5:
+                        local_logger.info(f"[{username}] ✅ Обнаружено 10 игроков (5 vs 5)! Запуск игры...")
+                        dota.launch_practice_lobby()
+                        gevent.sleep(3)
+                        local_logger.info(f"[{username}] 🎮 Игра запущена!")
+                        game_started = True
+                        break
+            except Exception as check_error:
+                local_logger.warning(f"[{username}] Ошибка проверки лобби: {check_error}")
         
-        # ВАЖНО: Явно удаляем лобби ПЕРЕД отключением
-        local_logger.info(f"[{username}] Удаление лобби...")
-        try:
-            dota.destroy_lobby()
-            gevent.sleep(3)  # Даём время серверам Valve обработать destroy
-            local_logger.info(f"[{username}] ✅ Лобби удалено")
-        except Exception as destroy_error:
-            local_logger.warning(f"[{username}] Ошибка при удалении лобби: {destroy_error}")
+        # ВАЖНО: Явно удаляем лобби ПЕРЕД отключением (но только если игра не запущена)
+        if not game_started:
+            local_logger.info(f"[{username}] Удаление лобби...")
+            try:
+                dota.destroy_lobby()
+                gevent.sleep(3)  # Даём время серверам Valve обработать destroy
+                local_logger.info(f"[{username}] ✅ Лобби удалено")
+            except Exception as destroy_error:
+                local_logger.warning(f"[{username}] Ошибка при удалении лобби: {destroy_error}")
+        else:
+            local_logger.info(f"[{username}] Игра запущена, лобби не удаляем")
         
         # Отключаемся от Steam
         try:
@@ -1105,7 +1136,8 @@ class RealDota2BotV2:
                     self.server_region,
                     self.game_mode,
                     result_queue,
-                    shutdown_event
+                    shutdown_event,
+                    start_code  # Передаём код запуска для автостарта
                 )
             )
             process.start()
