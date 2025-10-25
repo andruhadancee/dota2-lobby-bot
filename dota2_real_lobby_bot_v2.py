@@ -59,7 +59,7 @@ logger = logging.getLogger(__name__)
  WAITING_DELETE_CONFIRM, WAITING_GAME_MODE, WAITING_SERIES_TYPE,
  WAITING_MATCH_TEAM1, WAITING_MATCH_TEAM2, WAITING_MATCH_DATE,
  WAITING_MATCH_TIME, WAITING_MATCH_BO, WAITING_MATCH_GAME_MODE,
- WAITING_MATCH_SERIES) = range(15)
+ WAITING_MATCH_SERIES) = range(16)
 
 
 def steam_worker_process(username: str, password: str, lobby_name: str, 
