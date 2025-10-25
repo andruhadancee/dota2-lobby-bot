@@ -1106,7 +1106,7 @@ class RealDota2BotV2:
             self.shutdown_events[account.username] = shutdown_event
             
             # Ждем результата (с таймаутом)
-            max_wait_time = 120  # 2 минуты
+            max_wait_time = 180  # 3 минуты (увеличено для медленных соединений)
             start_time = time.time()
             result = None
             
@@ -1129,6 +1129,13 @@ class RealDota2BotV2:
                 if not result_queue.empty():
                     result = result_queue.get()
                     break
+            
+            # Закрываем очередь после использования
+            try:
+                result_queue.close()
+                result_queue.join_thread()
+            except:
+                pass
             
             # Анализируем результат
             if result and result.get('success'):
@@ -1155,23 +1162,61 @@ class RealDota2BotV2:
                 error_msg = result.get('error', 'Unknown error') if result else 'Timeout'
                 logger.error(f"❌ Не удалось создать лобби: {error_msg}")
                 
-                # Останавливаем процесс
+                # Освобождаем аккаунт
+                account.is_busy = False
+                
+                # Отправляем shutdown signal и останавливаем процесс
                 if process and process.is_alive():
-                    process.terminate()
-                    process.join(timeout=5)
+                    if account.username in self.shutdown_events:
+                        logger.info(f"Отправляем shutdown signal для {account.username}...")
+                        self.shutdown_events[account.username].set()
+                        process.join(timeout=10)  # Даём 10 сек на graceful shutdown
+                    
+                    if process.is_alive():
+                        logger.warning(f"Процесс {account.username} не завершился, принудительное завершение...")
+                        process.terminate()
+                        process.join(timeout=5)
+                    
+                    if process.is_alive():
+                        process.kill()
+                        process.join(timeout=2)
+                
+                # Очистка
+                if account.username in self.active_processes:
+                    del self.active_processes[account.username]
+                if account.username in self.shutdown_events:
+                    del self.shutdown_events[account.username]
                 
                 return None
             
         except Exception as e:
             logger.error(f"Ошибка создания РЕАЛЬНОГО лобби: {e}", exc_info=True)
             
+            # Освобождаем аккаунт
+            account.is_busy = False
+            
             # Останавливаем процесс
             if process and process.is_alive():
                 try:
-                    process.terminate()
-                    process.join(timeout=5)
+                    if account.username in self.shutdown_events:
+                        self.shutdown_events[account.username].set()
+                        process.join(timeout=10)
+                    
+                    if process.is_alive():
+                        process.terminate()
+                        process.join(timeout=5)
+                    
+                    if process.is_alive():
+                        process.kill()
+                        process.join(timeout=2)
                 except:
                     pass
+            
+            # Очистка
+            if account.username in self.active_processes:
+                del self.active_processes[account.username]
+            if account.username in self.shutdown_events:
+                del self.shutdown_events[account.username]
             
             return None
     
