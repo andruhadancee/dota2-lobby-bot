@@ -1546,9 +1546,9 @@ class RealDota2BotV2:
             # Закрываем бота (если есть старый)
             if lobby.account in self.active_bots:
                 try:
-                bot = self.active_bots[lobby.account]
-                bot.destroy_lobby()
-                bot.disconnect()
+                    bot = self.active_bots[lobby.account]
+                    bot.destroy_lobby()
+                    bot.disconnect()
                 except:
                     pass
                 del self.active_bots[lobby.account]
