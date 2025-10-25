@@ -91,42 +91,46 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
             lobby_data_container['data'] = lobby
             lobby_created.set()
         
-        def on_chat_message(*args, **kwargs):
-            """Пытаемся отловить сообщения чата"""
-            local_logger.info(f"[{username}] 💬 CHAT MESSAGE! args={args}, kwargs={kwargs}")
+        # Счётчик игроков для отслеживания изменений
+        player_counts = {'last_count': 0, 'last_radiant': 0, 'last_dire': 0}
         
-        def on_lobby_message(*args, **kwargs):
-            """Пытаемся отловить сообщения лобби"""
-            local_logger.info(f"[{username}] 💬 LOBBY MESSAGE! args={args}, kwargs={kwargs}")
-        
-        def on_any_event(event_name, *args, **kwargs):
-            """Ловим ВСЕ события"""
-            if 'chat' in event_name.lower() or 'message' in event_name.lower():
-                local_logger.info(f"[{username}] 🔔 EVENT: {event_name}, args={args}, kwargs={kwargs}")
+        def on_lobby_changed(lobby_obj):
+            """Отслеживаем ВСЕ изменения в лобби (игроки, чат и т.д.)"""
+            try:
+                # Проверяем количество игроков
+                if dota.lobby and hasattr(dota.lobby, 'members'):
+                    radiant = sum(1 for m in dota.lobby.members if m.team == 0)
+                    dire = sum(1 for m in dota.lobby.members if m.team == 1)
+                    total = radiant + dire
+                    
+                    # Логируем ТОЛЬКО при изменениях
+                    if (total != player_counts['last_count'] or 
+                        radiant != player_counts['last_radiant'] or 
+                        dire != player_counts['last_dire']):
+                        
+                        local_logger.info(f"[{username}] 👥 Игроков изменилось: {total}/10 (Radiant: {radiant}, Dire: {dire})")
+                        
+                        player_counts['last_count'] = total
+                        player_counts['last_radiant'] = radiant
+                        player_counts['last_dire'] = dire
+                
+                # Пытаемся найти информацию о чате в объекте лобби
+                if hasattr(lobby_obj, '__dict__'):
+                    lobby_dict = lobby_obj.__dict__
+                    # Ищем что-то связанное с чатом
+                    chat_fields = [k for k in lobby_dict.keys() if 'chat' in k.lower() or 'message' in k.lower()]
+                    if chat_fields:
+                        local_logger.info(f"[{username}] 💬 Найдены поля чата: {chat_fields}")
+                        for field in chat_fields:
+                            local_logger.info(f"[{username}] 💬 {field} = {lobby_dict[field]}")
+                        
+            except Exception as e:
+                pass  # Не спамим
         
         # Подписываемся на события
         dota.on('ready', on_dota_ready)
         dota.on(dota.EVENT_LOBBY_NEW, on_lobby_created)
-        
-        # Пытаемся подписаться на различные события чата
-        try:
-            dota.on('chat_message', on_chat_message)
-            local_logger.info(f"[{username}] ✅ Подписка на 'chat_message'")
-        except:
-            pass
-        
-        try:
-            dota.on('lobby_message', on_lobby_message)
-            local_logger.info(f"[{username}] ✅ Подписка на 'lobby_message'")
-        except:
-            pass
-        
-        try:
-            if hasattr(dota, 'EVENT_CHAT_MESSAGE'):
-                dota.on(dota.EVENT_CHAT_MESSAGE, on_chat_message)
-                local_logger.info(f"[{username}] ✅ Подписка на EVENT_CHAT_MESSAGE")
-        except:
-            pass
+        dota.on(dota.EVENT_LOBBY_CHANGED, on_lobby_changed)  # ВАЖНО: отслеживаем ВСЕ изменения
         
         # 1. Вход в Steam
         local_logger.info(f"[{username}] Подключение к Steam...")
@@ -259,10 +263,6 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                     radiant_players = sum(1 for m in lobby.members if m.team == 0)  # 0 = Radiant
                     dire_players = sum(1 for m in lobby.members if m.team == 1)     # 1 = Dire
                     total_players = radiant_players + dire_players
-                    
-                    # Логируем только когда есть игроки или когда первый раз проверяем
-                    if total_players > 0 or i == 0:
-                        local_logger.info(f"[{username}] 👥 Игроков: {total_players}/10 (Radiant: {radiant_players}, Dire: {dire_players})")
                     
                     # Если по 5 игроков в каждой команде - АВТОСТАРТ!
                     if radiant_players == 5 and dire_players == 5:
