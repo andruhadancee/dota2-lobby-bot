@@ -112,7 +112,7 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
         local_logger.info(f"[{username}] Создание лобби: {lobby_name}")
         
         server_mapping = {
-            'Stockholm': EServerRegion.Europe,
+            'Stockholm': 8,  # Stockholm = регион 8 в Dota 2
             'Europe West': EServerRegion.Europe,
             'Russia': EServerRegion.Europe,
             'US East': EServerRegion.USEast,
@@ -194,15 +194,17 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
         local_logger.info(f"[{username}] Лобби активно, держим 5 минут...")
         gevent.sleep(300)
         
-        # Перед завершением - ВЫХОДИМ ИЗ ЛОББИ
-        local_logger.info(f"[{username}] Время вышло, покидаем лобби...")
+        # Перед завершением - УДАЛЯЕМ ЛОББИ
+        local_logger.info(f"[{username}] Время вышло, удаляем лобби...")
         try:
-            dota.leave_practice_lobby()
+            dota.destroy_lobby()  # УДАЛЯЕМ лобби (не просто выходим!)
             gevent.sleep(2)
+            dota.leave_practice_lobby()
+            gevent.sleep(1)
             steam.disconnect()
-            local_logger.info(f"[{username}] Отключились от Steam")
-        except:
-            pass
+            local_logger.info(f"[{username}] Лобби удалено, отключились от Steam")
+        except Exception as cleanup_error:
+            local_logger.warning(f"[{username}] Ошибка при очистке: {cleanup_error}")
         
     except Exception as e:
         local_logger.error(f"[{username}] Ошибка: {e}", exc_info=True)
@@ -610,6 +612,8 @@ class RealDota2BotV2:
             elif data.startswith("close_lobby_"):
                 lobby_name = data.replace("close_lobby_", "")
                 await self.handle_close_lobby(query, lobby_name)
+            elif data == "destroy_all_lobbies":
+                await self.handle_destroy_all_lobbies(query)
         except Exception as e:
             logger.error(f"Ошибка обработки {data}: {e}", exc_info=True)
             try:
@@ -652,7 +656,16 @@ class RealDota2BotV2:
         message += f"<b>Свободных:</b> {len(self.get_available_accounts())}"
         
         keyboard.append([
-            InlineKeyboardButton("➕ Добавить бота", callback_data="add_bot"),
+            InlineKeyboardButton("➕ Добавить бота", callback_data="add_bot")
+        ])
+        
+        # Кнопка "Распустить все лобби" (если есть активные)
+        if self.active_lobbies:
+            keyboard.append([
+                InlineKeyboardButton("🔥 Распустить все лобби", callback_data="destroy_all_lobbies")
+            ])
+        
+        keyboard.append([
             InlineKeyboardButton("◀️ Назад", callback_data="back_main")
         ])
         
@@ -1194,6 +1207,10 @@ class RealDota2BotV2:
                         # Дополнительно убиваем все дочерние процессы
                         import subprocess
                         subprocess.run(['pkill', '-9', '-P', str(process.pid)], stderr=subprocess.DEVNULL)
+                        
+                        # Убиваем все процессы steam и python, связанные с этим аккаунтом
+                        logger.info(f"Очищаем все процессы steam/python для {lobby.account}")
+                        subprocess.run(['pkill', '-9', '-f', lobby.account], stderr=subprocess.DEVNULL)
                 except Exception as e:
                     logger.error(f"Ошибка остановки процесса: {e}")
                 finally:
@@ -1226,6 +1243,99 @@ class RealDota2BotV2:
             await self.handle_list_lobbies(query)
         else:
             await query.answer("❌ Лобби не найдено", show_alert=True)
+    
+    async def handle_destroy_all_lobbies(self, query):
+        """Удаление ВСЕХ активных лобби"""
+        if not self.active_lobbies:
+            await query.answer("❌ Нет активных лобби", show_alert=True)
+            return
+        
+        lobby_count = len(self.active_lobbies)
+        
+        # Показываем прогресс
+        await query.edit_message_text(
+            f"🔥 <b>Удаление всех лобби...</b>\n\n"
+            f"Найдено лобби: {lobby_count}\n"
+            f"⏳ Останавливаем процессы...",
+            parse_mode='HTML'
+        )
+        
+        import subprocess
+        closed_count = 0
+        
+        # Копируем список лобби (чтобы избежать изменения во время итерации)
+        lobbies_to_close = list(self.active_lobbies.items())
+        
+        for lobby_name, lobby in lobbies_to_close:
+            try:
+                # Останавливаем процесс Steam (если запущен)
+                if lobby.account in self.active_processes:
+                    process = self.active_processes[lobby.account]
+                    try:
+                        if process.is_alive():
+                            logger.info(f"Останавливаем процесс для {lobby.account}")
+                            process.terminate()
+                            process.join(timeout=2)
+                            if process.is_alive():
+                                process.kill()
+                                process.join(timeout=1)
+                            
+                            # Убиваем дочерние процессы
+                            subprocess.run(['pkill', '-9', '-P', str(process.pid)], stderr=subprocess.DEVNULL)
+                            subprocess.run(['pkill', '-9', '-f', lobby.account], stderr=subprocess.DEVNULL)
+                    except Exception as e:
+                        logger.error(f"Ошибка остановки процесса {lobby.account}: {e}")
+                    finally:
+                        if lobby.account in self.active_processes:
+                            del self.active_processes[lobby.account]
+                
+                # Закрываем бота (если есть)
+                if lobby.account in self.active_bots:
+                    try:
+                        bot = self.active_bots[lobby.account]
+                        bot.destroy_lobby()
+                        bot.disconnect()
+                    except:
+                        pass
+                    del self.active_bots[lobby.account]
+                
+                # Освобождаем аккаунт
+                for account in self.steam_accounts:
+                    if account.username == lobby.account:
+                        account.is_busy = False
+                        account.current_lobby = None
+                        account.bot_instance = None
+                        break
+                
+                # Удаляем лобби
+                if lobby_name in self.active_lobbies:
+                    del self.active_lobbies[lobby_name]
+                
+                closed_count += 1
+                logger.info(f"✅ Лобби {lobby_name} удалено ({closed_count}/{lobby_count})")
+                
+            except Exception as e:
+                logger.error(f"Ошибка удаления лобби {lobby_name}: {e}")
+        
+        # Дополнительная очистка всех процессов steam/dota
+        logger.info("🔪 Финальная очистка всех процессов...")
+        try:
+            subprocess.run(['pkill', '-9', '-f', 'steam'], stderr=subprocess.DEVNULL)
+            subprocess.run(['pkill', '-9', '-f', 'dota'], stderr=subprocess.DEVNULL)
+        except:
+            pass
+        
+        # Показываем результат
+        await query.edit_message_text(
+            f"✅ <b>Все лобби удалены!</b>\n\n"
+            f"🔥 Закрыто: {closed_count}\n"
+            f"💚 Все боты освобождены\n"
+            f"🧹 Процессы очищены",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("◀️ Назад", callback_data="manage_bots")
+            ]])
+        )
     
     # ==================== ОСТАЛЬНОЕ ====================
     
@@ -1378,6 +1488,15 @@ def main():
                         process.join()
             except Exception as e:
                 logger.error(f"Ошибка остановки процесса {username}: {e}")
+        
+        # УБИВАЕМ ВСЕ ОСТАВШИЕСЯ ПРОЦЕССЫ Steam/Dota/Python
+        logger.info("🔪 Очистка всех оставшихся процессов...")
+        import subprocess
+        try:
+            subprocess.run(['pkill', '-9', '-f', 'steam'], stderr=subprocess.DEVNULL)
+            subprocess.run(['pkill', '-9', '-f', 'dota'], stderr=subprocess.DEVNULL)
+        except:
+            pass
         
         logger.info("✅ Все процессы остановлены")
     except Exception as e:
