@@ -58,10 +58,11 @@ logger = logging.getLogger(__name__)
 
 def steam_worker_process(username: str, password: str, lobby_name: str, 
                          lobby_password: str, server: str, mode: str, 
-                         result_queue: Queue):
+                         result_queue: Queue, shutdown_event):
     """
     Функция для запуска в отдельном процессе.
     Выполняет вход в Steam, запуск Dota 2 и создание лобби.
+    shutdown_event - для корректного удаления лобби перед выходом.
     """
     # НЕ используем monkey.patch_all() - это вызывает RecursionError
     # gevent работает и без этого в отдельном процессе
@@ -196,17 +197,33 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
             local_logger.error(f"[{username}] Таймаут создания лобби")
             result_queue.put({'success': False, 'error': 'Lobby creation timeout'})
         
-        # Держим процесс живым 5 минут (practice lobby закроется автоматически)
-        local_logger.info(f"[{username}] Лобби активно, держим 5 минут...")
-        gevent.sleep(300)
+        # Держим процесс живым 5 минут, проверяем shutdown_event каждые 5 секунд
+        local_logger.info(f"[{username}] Лобби активно, ожидание команды закрытия...")
         
-        # Practice lobby автоматически закрывается при отключении
-        local_logger.info(f"[{username}] Отключаемся от Steam...")
+        # Проверяем shutdown_event каждые 5 секунд (60 раз = 5 минут)
+        for i in range(60):
+            gevent.sleep(5)
+            if shutdown_event.is_set():
+                local_logger.info(f"[{username}] 🛑 Получена команда закрытия лобби!")
+                break
+        
+        # ВАЖНО: Явно удаляем лобби ПЕРЕД отключением
+        local_logger.info(f"[{username}] Удаление лобби...")
         try:
+            dota.destroy_lobby()
+            gevent.sleep(3)  # Даём время серверам Valve обработать destroy
+            local_logger.info(f"[{username}] ✅ Лобби удалено")
+        except Exception as destroy_error:
+            local_logger.warning(f"[{username}] Ошибка при удалении лобби: {destroy_error}")
+        
+        # Отключаемся от Steam
+        try:
+            dota.leave_practice_lobby()
+            gevent.sleep(1)
             steam.disconnect()
             local_logger.info(f"[{username}] Отключились от Steam")
-        except Exception as cleanup_error:
-            local_logger.warning(f"[{username}] Ошибка при отключении: {cleanup_error}")
+        except Exception as disconnect_error:
+            local_logger.warning(f"[{username}] Ошибка при отключении: {disconnect_error}")
         
     except Exception as e:
         local_logger.error(f"[{username}] Ошибка: {e}", exc_info=True)
@@ -412,6 +429,7 @@ class RealDota2BotV2:
         self.active_lobbies: Dict[str, LobbyInfo] = {}  # "wb cup 1" -> LobbyInfo
         self.active_bots: Dict[str, DotaBot] = {}
         self.active_processes: Dict[str, Process] = {}  # username -> Process
+        self.shutdown_events: Dict[str, multiprocessing.Event] = {}  # username -> Event
         
         # Настройки
         self.lobby_base_name = "wb cup"  # Базовое название
@@ -1064,8 +1082,9 @@ class RealDota2BotV2:
                 parse_mode='HTML'
             )
             
-            # Создаем очередь для результата
+            # Создаем очередь для результата и event для shutdown
             result_queue = multiprocessing.Queue()
+            shutdown_event = multiprocessing.Event()
             
             # Запускаем Steam в отдельном процессе
             process = Process(
@@ -1077,10 +1096,14 @@ class RealDota2BotV2:
                     password,
                     self.server_region,
                     self.game_mode,
-                    result_queue
+                    result_queue,
+                    shutdown_event
                 )
             )
             process.start()
+            
+            # Сохраняем shutdown_event для возможности закрытия лобби
+            self.shutdown_events[account.username] = shutdown_event
             
             # Ждем результата (с таймаутом)
             max_wait_time = 120  # 2 минуты
@@ -1197,22 +1220,37 @@ class RealDota2BotV2:
                 process = self.active_processes[lobby.account]
                 try:
                     if process.is_alive():
-                        logger.info(f"Останавливаем процесс для {lobby.account}")
+                        logger.info(f"Останавливаем процесс для {lobby.account}, отправляем сигнал shutdown...")
                         
-                        # Practice lobby закроется автоматически при отключении
-                        process.terminate()
-                        process.join(timeout=2)
+                        # Устанавливаем shutdown_event для graceful shutdown
+                        if lobby.account in self.shutdown_events:
+                            shutdown_event = self.shutdown_events[lobby.account]
+                            shutdown_event.set()
+                            logger.info(f"Ждём удаления лобби (макс 20 секунд)...")
+                            
+                            # Даём процессу 20 секунд на удаление лобби
+                            process.join(timeout=20)
+                        
+                        # Если процесс не завершился - принудительно
+                        if process.is_alive():
+                            logger.warning(f"Процесс не завершился, принудительное завершение...")
+                            process.terminate()
+                            process.join(timeout=2)
                         
                         if process.is_alive():
-                            logger.warning(f"Процесс не завершился, убиваем...")
+                            logger.warning(f"Убиваем процесс...")
                             process.kill()
                             process.join(timeout=2)
+                        
+                        logger.info(f"✅ Процесс {lobby.account} остановлен")
                         
                 except Exception as e:
                     logger.error(f"Ошибка остановки процесса: {e}")
                 finally:
                     if lobby.account in self.active_processes:
                         del self.active_processes[lobby.account]
+                    if lobby.account in self.shutdown_events:
+                        del self.shutdown_events[lobby.account]
             
             # Закрываем бота (если есть старый)
             if lobby.account in self.active_bots:
@@ -1270,22 +1308,37 @@ class RealDota2BotV2:
                     process = self.active_processes[lobby.account]
                     try:
                         if process.is_alive():
-                            logger.info(f"Останавливаем процесс для {lobby.account}")
+                            logger.info(f"Останавливаем процесс для {lobby.account}, отправляем сигнал shutdown...")
                             
-                            # Practice lobby закроется автоматически при отключении
-                            process.terminate()
-                            process.join(timeout=2)
+                            # Устанавливаем shutdown_event для graceful shutdown
+                            if lobby.account in self.shutdown_events:
+                                shutdown_event = self.shutdown_events[lobby.account]
+                                shutdown_event.set()
+                                logger.info(f"Ждём удаления лобби {lobby_name} (макс 20 секунд)...")
+                                
+                                # Даём процессу 20 секунд на удаление лобби
+                                process.join(timeout=20)
+                            
+                            # Если процесс не завершился - принудительно
+                            if process.is_alive():
+                                logger.warning(f"Процесс {lobby.account} не завершился, принудительное завершение...")
+                                process.terminate()
+                                process.join(timeout=2)
                             
                             if process.is_alive():
-                                logger.warning(f"Процесс не завершился, убиваем...")
+                                logger.warning(f"Убиваем процесс {lobby.account}...")
                                 process.kill()
                                 process.join(timeout=2)
+                            
+                            logger.info(f"✅ Процесс {lobby.account} остановлен")
                             
                     except Exception as e:
                         logger.error(f"Ошибка остановки процесса {lobby.account}: {e}")
                     finally:
                         if lobby.account in self.active_processes:
                             del self.active_processes[lobby.account]
+                        if lobby.account in self.shutdown_events:
+                            del self.shutdown_events[lobby.account]
                 
                 # Закрываем бота (если есть)
                 if lobby.account in self.active_bots:
@@ -1473,13 +1526,23 @@ def main():
     except KeyboardInterrupt:
         logger.info("⏹️ Остановка бота...")
         
-        # Остановка всех процессов
+        # Отправляем сигнал shutdown всем процессам
+        for username in list(bot.shutdown_events.keys()):
+            if username in bot.shutdown_events:
+                logger.info(f"Отправляем сигнал shutdown для {username}...")
+                bot.shutdown_events[username].set()
+        
+        # Ждём завершения всех процессов (макс 25 секунд)
+        logger.info("Ожидание завершения всех процессов (макс 25 секунд)...")
         for username, process in list(bot.active_processes.items()):
             try:
                 if process.is_alive():
-                    logger.info(f"Останавливаем процесс {username}...")
-                    process.terminate()
-                    process.join(timeout=2)
+                    process.join(timeout=25)
+                    
+                    if process.is_alive():
+                        logger.warning(f"Процесс {username} не завершился, принудительное завершение...")
+                        process.terminate()
+                        process.join(timeout=2)
                     
                     if process.is_alive():
                         logger.warning(f"Убиваем {username}...")
