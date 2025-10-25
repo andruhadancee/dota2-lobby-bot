@@ -1,0 +1,31 @@
+{
+  "enabled": false,
+  "timezone": "Europe/Moscow",
+  "schedules": [
+    {
+      "id": 1,
+      "name": "Игра 1 - Понедельник",
+      "day_of_week": "monday",
+      "time": "18:00",
+      "lobby_count": 3,
+      "enabled": true
+    },
+    {
+      "id": 2,
+      "name": "Игра 2 - Понедельник",
+      "day_of_week": "monday",
+      "time": "20:00",
+      "lobby_count": 2,
+      "enabled": true
+    },
+    {
+      "id": 3,
+      "name": "Полуфинал - Среда",
+      "day_of_week": "wednesday",
+      "time": "19:00",
+      "lobby_count": 4,
+      "enabled": true
+    }
+  ]
+}
+

@@ -35,9 +35,13 @@ else
     echo "✅ NOTIFICATION_THREAD_ID уже есть"
 fi
 
-# 4. Активируем venv и запускаем бота
-echo "🚀 Запускаем обновлённого бота..."
+# 4. Устанавливаем новые зависимости
+echo "📦 Обновляем зависимости..."
 source venv/bin/activate
+pip install -q -r requirements.txt
+
+# 5. Запускаем бота
+echo "🚀 Запускаем обновлённого бота..."
 python3 main.py
 
 echo "===================================="

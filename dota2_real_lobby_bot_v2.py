@@ -15,9 +15,12 @@ import threading
 import asyncio
 import multiprocessing
 from multiprocessing import Process, Queue
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from dotenv import load_dotenv
+import pytz
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 # Steam и Dota 2
 import gevent
@@ -519,9 +522,14 @@ class RealDota2BotV2:
         # Счетчик лобби (ВАЖНО: НЕ сохраняем между перезапусками!)
         self.lobby_counter = 1
         
+        # Расписание
+        self.schedule_config = {}
+        self.scheduler = None
+        
         # Загрузка
         self.load_accounts()
         self.load_settings()
+        self.load_schedule()
         
         # ВАЖНО: Очищаем все аккаунты при старте (новая сессия = новые лобби)
         for account in self.steam_accounts:
@@ -606,6 +614,34 @@ class RealDota2BotV2:
         except Exception as e:
             logger.error(f"Ошибка сохранения настроек: {e}")
     
+    def load_schedule(self):
+        """Загрузка расписания"""
+        try:
+            if os.path.exists('schedule_config.json'):
+                with open('schedule_config.json', 'r', encoding='utf-8') as f:
+                    self.schedule_config = json.load(f)
+                logger.info(f"📅 Загружено расписаний: {len(self.schedule_config.get('schedules', []))}")
+            else:
+                # Создаём пустое расписание
+                self.schedule_config = {
+                    "enabled": False,
+                    "timezone": "Europe/Moscow",
+                    "schedules": []
+                }
+                self.save_schedule()
+        except Exception as e:
+            logger.error(f"Ошибка загрузки расписания: {e}")
+            self.schedule_config = {"enabled": False, "timezone": "Europe/Moscow", "schedules": []}
+    
+    def save_schedule(self):
+        """Сохранение расписания"""
+        try:
+            with open('schedule_config.json', 'w', encoding='utf-8') as f:
+                json.dump(self.schedule_config, f, ensure_ascii=False, indent=2)
+            logger.info("💾 Расписание сохранено")
+        except Exception as e:
+            logger.error(f"Ошибка сохранения расписания: {e}")
+    
     def generate_password(self, length=8) -> str:
         chars = string.ascii_letters + string.digits
         return ''.join(random.choice(chars) for _ in range(length))
@@ -630,6 +666,7 @@ class RealDota2BotV2:
             [InlineKeyboardButton("🎮 Создать лобби", callback_data="create_lobby")],
             [InlineKeyboardButton("📋 Список лобби", callback_data="list_lobbies")],
             [InlineKeyboardButton("🤖 Управление ботами", callback_data="manage_bots")],
+            [InlineKeyboardButton("📅 Расписание", callback_data="schedule")],
             [InlineKeyboardButton("⚙️ Настройки", callback_data="settings"),
              InlineKeyboardButton("📊 Статус", callback_data="status")],
         ]
@@ -702,6 +739,10 @@ class RealDota2BotV2:
                 return await self.handle_edit_bot_request(update, context)
             elif data == "select_bots":
                 return await self.handle_select_bots_menu(update, context)
+            elif data == "schedule":
+                await self.handle_schedule(query)
+            elif data.startswith("schedule_"):
+                await self.handle_schedule_action(query, data)
             elif data == "settings":
                 await self.handle_settings(query)
             elif data == "status":
@@ -1601,6 +1642,104 @@ class RealDota2BotV2:
                 InlineKeyboardButton("◀️ Назад", callback_data="back_main")
             ]])
         )
+    
+    async def handle_schedule(self, query):
+        """Меню управления расписанием"""
+        schedules = self.schedule_config.get('schedules', [])
+        is_enabled = self.schedule_config.get('enabled', False)
+        
+        message = f"""
+<b>📅 Автоматическое расписание</b>
+
+<b>Статус:</b> {'🟢 Включено' if is_enabled else '🔴 Выключено'}
+<b>Часовой пояс:</b> {self.schedule_config.get('timezone', 'Europe/Moscow')}
+
+<b>📋 Расписаний:</b> {len(schedules)}
+"""
+        
+        keyboard = []
+        
+        # Список расписаний
+        for idx, schedule in enumerate(schedules, 1):
+            status_emoji = "✅" if schedule.get('enabled', False) else "⏸️"
+            day = schedule.get('day_of_week', 'unknown')
+            time_str = schedule.get('time', '00:00')
+            count = schedule.get('lobby_count', 0)
+            name = schedule.get('name', f'Расписание {idx}')
+            
+            message += f"\n{status_emoji} <b>{idx}.</b> {name}\n"
+            message += f"   📅 {day.capitalize()} в {time_str}\n"
+            message += f"   🎮 Лобби: {count}\n"
+            
+            keyboard.append([
+                InlineKeyboardButton(f"✏️ {idx}", callback_data=f"schedule_edit_{schedule.get('id', idx)}"),
+                InlineKeyboardButton(f"{'⏸️' if schedule.get('enabled') else '▶️'} {idx}", 
+                                   callback_data=f"schedule_toggle_{schedule.get('id', idx)}"),
+                InlineKeyboardButton(f"🗑️ {idx}", callback_data=f"schedule_delete_{schedule.get('id', idx)}")
+            ])
+        
+        # Кнопки управления
+        keyboard.append([
+            InlineKeyboardButton("➕ Добавить расписание", callback_data="schedule_add")
+        ])
+        
+        keyboard.append([
+            InlineKeyboardButton(f"{'🔴 Выключить' if is_enabled else '🟢 Включить'}", 
+                               callback_data="schedule_toggle_global"),
+            InlineKeyboardButton("◀️ Назад", callback_data="back_main")
+        ])
+        
+        await query.edit_message_text(
+            message,
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    
+    async def handle_schedule_action(self, query, data: str):
+        """Обработка действий с расписанием"""
+        if data == "schedule_toggle_global":
+            # Включить/выключить всё расписание
+            self.schedule_config['enabled'] = not self.schedule_config.get('enabled', False)
+            self.save_schedule()
+            await query.answer(
+                f"✅ Расписание {'включено' if self.schedule_config['enabled'] else 'выключено'}!",
+                show_alert=True
+            )
+            await self.handle_schedule(query)
+        
+        elif data == "schedule_add":
+            # TODO: Добавить новое расписание (пока заглушка)
+            await query.answer("⚠️ Функция в разработке! Используй файл schedule_config.json", show_alert=True)
+        
+        elif data.startswith("schedule_toggle_"):
+            # Включить/выключить конкретное расписание
+            schedule_id = int(data.replace("schedule_toggle_", ""))
+            schedules = self.schedule_config.get('schedules', [])
+            for schedule in schedules:
+                if schedule.get('id') == schedule_id:
+                    schedule['enabled'] = not schedule.get('enabled', False)
+                    self.save_schedule()
+                    await query.answer(
+                        f"✅ Расписание {'включено' if schedule['enabled'] else 'выключено'}!",
+                        show_alert=True
+                    )
+                    break
+            await self.handle_schedule(query)
+        
+        elif data.startswith("schedule_delete_"):
+            # Удалить расписание
+            schedule_id = int(data.replace("schedule_delete_", ""))
+            self.schedule_config['schedules'] = [
+                s for s in self.schedule_config.get('schedules', []) 
+                if s.get('id') != schedule_id
+            ]
+            self.save_schedule()
+            await query.answer("✅ Расписание удалено!", show_alert=True)
+            await self.handle_schedule(query)
+        
+        elif data.startswith("schedule_edit_"):
+            # TODO: Редактирование (пока заглушка)
+            await query.answer("⚠️ Функция в разработке! Используй файл schedule_config.json", show_alert=True)
     
     async def handle_status(self, query):
         total = len(self.steam_accounts)
