@@ -69,12 +69,44 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
     logging.basicConfig(level=logging.INFO)
     local_logger = logging.getLogger(f"steam_worker_{username}")
     
+    # Глобальные переменные для graceful shutdown
+    shutdown_requested = threading.Event()
+    steam_client = None
+    dota_client = None
+    
+    def cleanup_and_exit(signum=None, frame=None):
+        """Graceful shutdown - удаляем лобби перед выходом"""
+        local_logger.info(f"[{username}] 🛑 Получен сигнал завершения, удаляем лобби...")
+        try:
+            if dota_client:
+                dota_client.destroy_lobby()
+                gevent.sleep(1)
+                dota_client.leave_practice_lobby()
+                gevent.sleep(1)
+            if steam_client:
+                steam_client.disconnect()
+            local_logger.info(f"[{username}] ✅ Лобби удалено, выход")
+        except Exception as e:
+            local_logger.warning(f"[{username}] Ошибка при cleanup: {e}")
+        finally:
+            import sys
+            sys.exit(0)
+    
+    # Регистрируем обработчик сигнала SIGTERM
+    import signal
+    signal.signal(signal.SIGTERM, cleanup_and_exit)
+    signal.signal(signal.SIGINT, cleanup_and_exit)
+    
     try:
         local_logger.info(f"[{username}] Процесс запущен")
         
         # Создаем Steam клиент
         steam = SteamClient()
         dota = Dota2Client(steam)
+        
+        # Сохраняем в глобальные переменные для cleanup
+        steam_client = steam
+        dota_client = dota
         
         lobby_created = threading.Event()
         lobby_data_container = {'data': None}
@@ -144,13 +176,10 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
             'dire_series_wins': 0,
         }
         
-        # Создаем ТУРНИРНОЕ лобби (не practice!)
-        # Tournament ID можно получить из настроек турнира
-        local_logger.info(f"[{username}] Создание турнирного лобби...")
-        dota.create_tournament_lobby(
+        # Создаем PRACTICE лобби (автоматически закрывается при отключении!)
+        local_logger.info(f"[{username}] Создание лобби...")
+        dota.create_practice_lobby(
             password=lobby_password,
-            tournament_game_id=None,  # None = автоматический ID
-            tournament_id=0,  # 0 = без привязки к турниру
             options=options
         )
         
@@ -1195,22 +1224,24 @@ class RealDota2BotV2:
                 process = self.active_processes[lobby.account]
                 try:
                     if process.is_alive():
-                        logger.info(f"Останавливаем процесс для {lobby.account}")
-                        # Сначала мягко (terminate), затем жёстко (kill)
+                        logger.info(f"Останавливаем процесс для {lobby.account} (graceful shutdown...)")
+                        # Отправляем SIGTERM - процесс должен удалить лобби и выйти
                         process.terminate()
-                        process.join(timeout=3)
+                        # Даём 10 секунд на graceful shutdown
+                        process.join(timeout=10)
+                        
                         if process.is_alive():
-                            logger.warning(f"Процесс не остановился, убиваем принудительно...")
+                            logger.warning(f"Процесс {lobby.account} не завершился, принудительное завершение...")
                             process.kill()  # SIGKILL
                             process.join(timeout=2)
                         
-                        # Дополнительно убиваем все дочерние процессы
+                        # Дополнительно убиваем все дочерние процессы (если остались)
                         import subprocess
-                        subprocess.run(['pkill', '-9', '-P', str(process.pid)], stderr=subprocess.DEVNULL)
-                        
-                        # Убиваем все процессы steam и python, связанные с этим аккаунтом
-                        logger.info(f"Очищаем все процессы steam/python для {lobby.account}")
-                        subprocess.run(['pkill', '-9', '-f', lobby.account], stderr=subprocess.DEVNULL)
+                        try:
+                            subprocess.run(['pkill', '-9', '-P', str(process.pid)], stderr=subprocess.DEVNULL)
+                            subprocess.run(['pkill', '-9', '-f', lobby.account], stderr=subprocess.DEVNULL)
+                        except:
+                            pass
                 except Exception as e:
                     logger.error(f"Ошибка остановки процесса: {e}")
                 finally:
@@ -1273,16 +1304,23 @@ class RealDota2BotV2:
                     process = self.active_processes[lobby.account]
                     try:
                         if process.is_alive():
-                            logger.info(f"Останавливаем процесс для {lobby.account}")
+                            logger.info(f"Останавливаем процесс для {lobby.account} (graceful shutdown...)")
+                            # Отправляем SIGTERM - процесс должен удалить лобби и выйти
                             process.terminate()
-                            process.join(timeout=2)
-                            if process.is_alive():
-                                process.kill()
-                                process.join(timeout=1)
+                            # Даём 10 секунд на graceful shutdown
+                            process.join(timeout=10)
                             
-                            # Убиваем дочерние процессы
-                            subprocess.run(['pkill', '-9', '-P', str(process.pid)], stderr=subprocess.DEVNULL)
-                            subprocess.run(['pkill', '-9', '-f', lobby.account], stderr=subprocess.DEVNULL)
+                            if process.is_alive():
+                                logger.warning(f"Процесс {lobby.account} не завершился, принудительное завершение...")
+                                process.kill()
+                                process.join(timeout=2)
+                            
+                            # Убиваем дочерние процессы (если остались)
+                            try:
+                                subprocess.run(['pkill', '-9', '-P', str(process.pid)], stderr=subprocess.DEVNULL)
+                                subprocess.run(['pkill', '-9', '-f', lobby.account], stderr=subprocess.DEVNULL)
+                            except:
+                                pass
                     except Exception as e:
                         logger.error(f"Ошибка остановки процесса {lobby.account}: {e}")
                     finally:
