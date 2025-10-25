@@ -500,6 +500,7 @@ class RealDota2BotV2:
         self.telegram_token = os.getenv('TELEGRAM_BOT_TOKEN')
         self.admin_ids = [int(id.strip()) for id in os.getenv('ADMIN_IDS', '').split(',') if id.strip()]
         self.notification_chat_id = os.getenv('NOTIFICATION_CHAT_ID')
+        self.notification_thread_id = int(os.getenv('NOTIFICATION_THREAD_ID', '0')) if os.getenv('NOTIFICATION_THREAD_ID') else None
         
         self.telegram_app = None
         
@@ -1097,14 +1098,20 @@ class RealDota2BotV2:
             reply_markup=self.get_main_keyboard()
         )
         
-        # Уведомление
+        # Уведомление в топик группы
         if self.notification_chat_id:
             try:
-                await context.bot.send_message(
-                    chat_id=self.notification_chat_id,
-                    text=message,
-                    parse_mode='HTML'
-                )
+                send_kwargs = {
+                    'chat_id': self.notification_chat_id,
+                    'text': message,
+                    'parse_mode': 'HTML'
+                }
+                # Если указан ID топика - отправляем в топик
+                if self.notification_thread_id:
+                    send_kwargs['message_thread_id'] = self.notification_thread_id
+                
+                await context.bot.send_message(**send_kwargs)
+                logger.info(f"✅ Уведомление отправлено в {'топик ' + str(self.notification_thread_id) if self.notification_thread_id else 'чат'}")
             except Exception as e:
                 logger.error(f"Ошибка уведомления: {e}")
         
