@@ -140,7 +140,7 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
         server_region = server_mapping.get(server, EServerRegion.Europe)
         game_mode = mode_mapping.get(mode, DOTA_GameMode.DOTA_GAMEMODE_CM)
         
-        # Настройки лобби
+        # Настройки лобби с League ID турнира
         options = {
             'game_name': lobby_name,
             'pass_key': lobby_password,
@@ -153,13 +153,13 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
             'cm_pick': 1,  # Captains Mode: подброс монетки для выбора стороны (право первого выбора)
             'radiant_series_wins': 0,
             'dire_series_wins': 0,
+            'leagueid': 18390,  # ID турнира для отображения в настройках лобби
         }
         
-        # Создаем TOURNAMENT лобби с League ID 18390
-        local_logger.info(f"[{username}] Создание турнирного лобби (League ID: 18390)...")
-        dota.create_tournament_lobby(
+        # Создаем practice лобби с турнирными настройками (автоматически закрывается при отключении)
+        local_logger.info(f"[{username}] Создание лобби с League ID: 18390...")
+        dota.create_practice_lobby(
             password=lobby_password,
-            tournament_id=18390,  # ID турнира в Dota 2
             options=options
         )
         
@@ -216,14 +216,15 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
             
             # Проверяем состояние лобби - есть ли 10 игроков (5 vs 5)
             try:
-                if dota.current_lobby:
-                    lobby = dota.current_lobby
+                if dota.lobby and hasattr(dota.lobby, 'members'):
+                    lobby = dota.lobby
                     
                     # Подсчитываем игроков в командах
                     radiant_players = sum(1 for m in lobby.members if m.team == 0)  # 0 = Radiant
                     dire_players = sum(1 for m in lobby.members if m.team == 1)     # 1 = Dire
                     
-                    local_logger.info(f"[{username}] Игроков: Radiant={radiant_players}, Dire={dire_players}")
+                    total_players = radiant_players + dire_players
+                    local_logger.info(f"[{username}] Игроков: Radiant={radiant_players}, Dire={dire_players}, Всего={total_players}")
                     
                     # Если по 5 игроков в каждой команде - автостарт!
                     if radiant_players == 5 and dire_players == 5:
@@ -234,7 +235,8 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                         game_started = True
                         break
             except Exception as check_error:
-                local_logger.warning(f"[{username}] Ошибка проверки лобби: {check_error}")
+                # Не спамим логами, проверка идёт каждые 5 секунд
+                pass
         
         # ВАЖНО: Явно удаляем лобби ПЕРЕД отключением (но только если игра не запущена)
         if not game_started:
