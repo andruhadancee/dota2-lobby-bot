@@ -14,6 +14,7 @@ import time
 import threading
 import asyncio
 import multiprocessing
+import signal
 from multiprocessing import Process, Queue
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
@@ -213,6 +214,7 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
             'dota_tv_delay': 2,
             'fill_with_bots': False,
             'cm_pick': 1,  # Captains Mode: подброс монетки для выбора стороны (право первого выбора)
+            'selection_priority_choice': 1,  # Порядок выбора: 1 = подброс монетки (coin toss)
             'radiant_series_wins': 0,
             'dire_series_wins': 0,
             'leagueid': 18390,  # ID турнира для отображения в настройках лобби
@@ -269,7 +271,8 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
             result_queue.put({'success': False, 'error': 'Lobby creation timeout'})
         
         # Держим процесс живым 5 минут, автостарт в зависимости от режима
-        is_1v1 = (mode == '1v1 Solo Mid')
+        # Mid Only и 1v1 Solo Mid - оба режима для 1v1 (2 игрока)
+        is_1v1 = (mode in ['1v1 Solo Mid', 'Mid Only'])
         required_radiant = 1 if is_1v1 else 5
         required_dire = 1 if is_1v1 else 5
         total_required = required_radiant + required_dire
@@ -1509,14 +1512,14 @@ class RealDota2BotV2:
                     account=account.username,
                 )
                 
-                # Сохраняем
+                # ВАЖНО: Сразу сохраняем процесс и очередь для мониторинга (до обновления статуса)
+                self.active_processes[account.username] = process
+                self.result_queues[account.username] = result_queue
+                
+                # Теперь обновляем статус
                 self.active_lobbies[lobby_name] = lobby_info
                 account.is_busy = True
                 account.current_lobby = lobby_name
-                
-                # Сохраняем процесс и очередь для мониторинга
-                self.active_processes[account.username] = process
-                self.result_queues[account.username] = result_queue
                 
                 return lobby_info
             else:
@@ -2614,6 +2617,30 @@ class RealDota2BotV2:
         self.telegram_app.add_handler(match_handler)
         self.telegram_app.add_handler(CallbackQueryHandler(self.button_callback))
     
+    def shutdown_all_lobbies(self, signum=None, frame=None):
+        """Graceful shutdown - удаляет все активные лобби"""
+        logger.info("=" * 50)
+        logger.info("🛑 Получен сигнал завершения работы, закрываем все лобби...")
+        logger.info("=" * 50)
+        
+        # Отправляем shutdown signal всем активным процессам
+        for username, event in list(self.shutdown_events.items()):
+            logger.info(f"Отправка shutdown signal для {username}...")
+            event.set()
+        
+        # Ждем завершения всех процессов (максимум 15 секунд на каждый)
+        for username, process in list(self.active_processes.items()):
+            if process.is_alive():
+                logger.info(f"Ожидание завершения процесса {username}...")
+                process.join(timeout=15)
+                
+                if process.is_alive():
+                    logger.warning(f"Процесс {username} не завершился, принудительное завершение...")
+                    process.terminate()
+                    process.join(timeout=5)
+        
+        logger.info("✅ Все лобби закрыты")
+    
     def start_sync(self):
         logger.info("=" * 50)
         logger.info("🚀 REAL Dota 2 Lobby Bot v2")
@@ -2627,12 +2654,20 @@ class RealDota2BotV2:
         self.setup_telegram_bot()
         self.setup_scheduler()
         
+        # Регистрируем обработчики сигналов для graceful shutdown
+        signal.signal(signal.SIGINT, self.shutdown_all_lobbies)
+        signal.signal(signal.SIGTERM, self.shutdown_all_lobbies)
+        
         logger.info(f"Аккаунтов: {len(self.steam_accounts)}")
         logger.info("✅ Бот запущен!")
         logger.info("🔗 Режим: РЕАЛЬНОЕ создание лобби v2")
         logger.info("=" * 50)
         
-        self.telegram_app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+        try:
+            self.telegram_app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+        finally:
+            # На случай если polling завершился без сигнала
+            self.shutdown_all_lobbies()
 
 
 def main():
