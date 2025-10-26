@@ -241,40 +241,19 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
             except Exception as e:
                 local_logger.warning(f"[{username}] Ошибка применения настроек: {e}")
             
-            # Применяем подброс монетки для порядка выбора (работает для всех режимов)
-            try:
-                coin_toss_options = {
-                    'selection_priority': 1  # 1 = подброс монетки (coin toss)
-                }
-                dota.config_practice_lobby(options=coin_toss_options)
-                local_logger.info(f"[{username}] ✅ Подброс монетки включен")
-                gevent.sleep(1)
-            except Exception as e:
-                local_logger.debug(f"[{username}] Подброс монетки (попытка 1): {e}")
-                # Пробуем альтернативный параметр
-                try:
-                    alt_options = {
-                        'cm_pick': 1  # Альтернативный параметр для подброса монетки
-                    }
-                    dota.config_practice_lobby(options=alt_options)
-                    local_logger.info(f"[{username}] ✅ Подброс монетки включен (альтернативный метод)")
-                    gevent.sleep(1)
-                except Exception as e2:
-                    local_logger.warning(f"[{username}] Не удалось включить подброс монетки: {e2}")
-            
-            # КРИТИЧНО: Бот присоединяется к observer slot (team=4) чтобы лобби не удалилось
+            # ВАЖНО: Заходим в слот наблюдателя (team=4) чтобы загрузиться в игру
             try:
                 # Сначала занимаем канал трансляции
                 dota.join_practice_lobby_broadcast_channel(channel=1)
-                local_logger.info(f"[{username}] 📡 Занят слот в канале трансляции")
+                local_logger.info(f"[{username}] Занят слот в канале трансляции")
                 gevent.sleep(1)
                 
-                # Затем присоединяемся к слоту наблюдателя
+                # Затем присоединяемся к слоту наблюдателя чтобы загрузиться в игру
                 dota.join_practice_lobby_team(team=4)
                 local_logger.info(f"[{username}] ✅ Присоединились к слоту наблюдателя (team=4)")
                 gevent.sleep(1)
             except Exception as e:
-                local_logger.warning(f"[{username}] ⚠️ Ошибка входа в observer: {e}")
+                local_logger.warning(f"[{username}] Ошибка входа: {e}")
             
             local_logger.info(f"[{username}] ✅ Лобби полностью настроено!")
             result_queue.put({
