@@ -90,7 +90,6 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
         
         lobby_created = threading.Event()
         lobby_data_container = {'data': None}
-        old_lobby_id = None  # Сохраняем ID старого лобби для проверки
         
         def on_dota_ready():
             local_logger.info(f"[{username}] Dota 2 готов")
@@ -98,17 +97,6 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
             local_logger.info(f"[{username}] Доступные события dota: {dir(dota)}")
         
         def on_lobby_created(lobby):
-            # КРИТИЧЕСКИ ВАЖНО: Проверяем что это НОВОЕ лобби, а не кеш!
-            try:
-                new_lobby_id = getattr(lobby, 'lobby_id', None)
-                if new_lobby_id and new_lobby_id == old_lobby_id:
-                    local_logger.warning(f"[{username}] ⚠️ EVENT_LOBBY_NEW но ID старый ({new_lobby_id})! Игнорируем...")
-                    return  # НЕ устанавливаем event!
-                else:
-                    local_logger.info(f"[{username}] ✅ НОВОЕ лобби создано! ID={new_lobby_id} (старое: {old_lobby_id})")
-            except Exception as e:
-                local_logger.warning(f"[{username}] Не удалось проверить ID: {e}")
-            
             local_logger.info(f"[{username}] Лобби создано!")
             lobby_data_container['data'] = lobby
             lobby_created.set()
@@ -172,54 +160,18 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
         # Ждем подключения к координатору (макс 60 сек)
         gevent.sleep(10)  # Даем время на подключение
         
-        # КРИТИЧЕСКИ ВАЖНО: Сохраняем ID старого лобби (если есть)
+        # Очищаем любой кеш лобби (при подключении может быть мусор)
         try:
-            if hasattr(dota, 'lobby') and dota.lobby is not None:
-                old_lobby_id = getattr(dota.lobby, 'lobby_id', None)
-                if old_lobby_id:
-                    local_logger.info(f"[{username}] ⚠️ Обнаружен кеш старого лобби ID={old_lobby_id}")
+            dota.leave_practice_lobby()
+            gevent.sleep(1)
         except:
             pass
         
-        # КРИТИЧНО: Для турнирных лобби нужно ПОЛНОСТЬЮ переподключиться к Dota!
-        if old_lobby_id:
-            local_logger.info(f"[{username}] ⚠️ Обнаружен кеш турнирного лобби! ПЕРЕПОДКЛЮЧАЕМСЯ к Dota...")
-            try:
-                dota.leave_practice_lobby()
-                gevent.sleep(1)
-                dota.destroy_lobby()
-                gevent.sleep(2)
-            except:
-                pass
-            
-            # ПОЛНОЕ переподключение к Dota 2
-            local_logger.info(f"[{username}] 🔄 Выход из Dota 2...")
-            try:
-                dota.exit()
-                gevent.sleep(3)
-            except:
-                pass
-            
-            local_logger.info(f"[{username}] 🔄 Повторный запуск Dota 2...")
-            dota.launch()
-            gevent.sleep(10)
-            local_logger.info(f"[{username}] ✅ Dota 2 перезапущен, кеш очищен!")
-            old_lobby_id = None  # Сбрасываем, т.к. после переподключения кеша нет
-        else:
-            # Если кеша не было - просто очищаем на всякий случай
-            local_logger.info(f"[{username}] Очистка кеша лобби...")
-            try:
-                dota.leave_practice_lobby()
-                gevent.sleep(1)
-            except:
-                pass
-            
-            try:
-                dota.destroy_lobby()
-                gevent.sleep(2)
-                local_logger.info(f"[{username}] ✅ Кеш очищен")
-            except:
-                local_logger.info(f"[{username}] ✅ Кеш был пустой")
+        try:
+            dota.destroy_lobby()
+            gevent.sleep(2)
+        except:
+            pass
         
         # 3. Создание лобби
         local_logger.info(f"[{username}] Создание лобби: {lobby_name}")
