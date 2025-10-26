@@ -417,33 +417,32 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                     # Проверяем разные признаки того, что лобби закрылось
                     lobby_exists = hasattr(dota, 'lobby') and dota.lobby is not None
                     
+                    local_logger.info(f"[{username}] 🔍 Проверка лобби после игры: exists={lobby_exists}")
+                    
                     if lobby_exists:
                         # Дополнительно проверяем, есть ли у лобби обязательные атрибуты
-                        has_members = hasattr(dota.lobby, 'all_members') or hasattr(dota.lobby, 'members')
-                        lobby_id = getattr(dota.lobby, 'lobby_id', None) if hasattr(dota.lobby, 'lobby_id') else None
-                        
-                        local_logger.debug(f"[{username}] 🔍 Проверка лобби: exists={lobby_exists}, has_members={has_members}, lobby_id={lobby_id}")
-                        
-                        # Если лобби существует, но нет ключевых атрибутов - значит закрылось
-                        if not has_members or lobby_id is None:
-                            local_logger.info(f"[{username}] 🏁 Лобби закрылось (игра завершена) - нет атрибутов!")
+                        try:
+                            lobby_id = dota.lobby.lobby_id
+                            local_logger.info(f"[{username}] 🔍 Лобби всё ещё существует, ID={lobby_id}")
+                        except:
+                            local_logger.info(f"[{username}] 🏁 Лобби закрылось (игра завершена) - нет lobby_id!")
                             result_queue.put({'success': False, 'lobby_closed': True})
-                            # ВАЖНО: Даём время основному процессу прочитать сообщение из очереди
                             local_logger.info(f"[{username}] ⏳ Ожидание обработки сообщения о закрытии (15 секунд)...")
                             gevent.sleep(15)
                             break
                     else:
                         local_logger.info(f"[{username}] 🏁 Лобби закрылось (игра завершена) - объект не существует!")
                         result_queue.put({'success': False, 'lobby_closed': True})
-                        # ВАЖНО: Даём время основному процессу прочитать сообщение из очереди
                         local_logger.info(f"[{username}] ⏳ Ожидание обработки сообщения о закрытии (15 секунд)...")
                         gevent.sleep(15)
                         break
                         
                 except Exception as check_error:
-                    local_logger.debug(f"[{username}] ⚠️ Ошибка проверки лобби: {check_error}")
-                    # Если возникла ошибка при проверке - возможно лобби закрылось
-                    pass
+                    local_logger.warning(f"[{username}] ⚠️ Ошибка проверки лобби: {check_error}")
+                    local_logger.info(f"[{username}] 🏁 Ошибка проверки - вероятно лобби закрылось!")
+                    result_queue.put({'success': False, 'lobby_closed': True})
+                    gevent.sleep(15)
+                    break
             
             # Получена команда закрытия или игра завершена
             local_logger.info(f"[{username}] 🛑 Завершение работы...")
