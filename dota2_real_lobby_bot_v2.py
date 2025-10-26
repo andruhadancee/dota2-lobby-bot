@@ -160,59 +160,20 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
         # Ждем подключения к координатору (макс 60 сек)
         gevent.sleep(10)  # Даем время на подключение
         
-        # ВАЖНО: Сначала удаляем любое старое лобби (если есть)
-        local_logger.info(f"[{username}] Проверка и удаление старых лобби...")
-        
-        # Сохраняем ID старого лобби для проверки
-        old_lobby_id = None
+        # ВАЖНО: Очищаем любой кеш лобби (при подключении может быть мусор)
+        local_logger.info(f"[{username}] Очистка кеша лобби...")
         try:
-            if hasattr(dota, 'lobby') and dota.lobby is not None:
-                old_lobby_id = getattr(dota.lobby, 'lobby_id', None)
-                if old_lobby_id:
-                    local_logger.info(f"[{username}] ⚠️ Найдено старое лобби ID={old_lobby_id}, удаляем...")
-                    
-                    # 1. Сначала выходим из лобби
-                    try:
-                        dota.leave_practice_lobby()
-                        local_logger.info(f"[{username}] 🚪 Вышли из старого лобби")
-                        gevent.sleep(2)
-                    except Exception as e:
-                        local_logger.warning(f"[{username}] Не удалось выйти: {e}")
-                    
-                    # 2. Уничтожаем лобби
-                    try:
-                        dota.destroy_lobby()
-                        local_logger.info(f"[{username}] 💥 Команда destroy отправлена")
-                        gevent.sleep(3)
-                    except Exception as e:
-                        local_logger.warning(f"[{username}] Ошибка destroy: {e}")
-                    
-                    # 3. ВАЖНО: Ждём в цикле, пока старое лобби НЕ исчезнет
-                    for i in range(10):  # Макс 10 секунд
-                        gevent.sleep(1)
-                        try:
-                            if hasattr(dota, 'lobby') and dota.lobby is not None:
-                                current_id = dota.lobby.lobby_id
-                                if current_id == old_lobby_id:
-                                    local_logger.info(f"[{username}] ⏳ Старое лобби всё ещё существует ({i+1}/10)...")
-                                    continue
-                                else:
-                                    local_logger.info(f"[{username}] ✅ ID изменился! Старое={old_lobby_id}, Новое={current_id}")
-                                    break
-                            else:
-                                local_logger.info(f"[{username}] ✅ dota.lobby стал None!")
-                                break
-                        except:
-                            local_logger.info(f"[{username}] ✅ Старое лобби удалено (нет доступа к lobby_id)")
-                            break
-                    else:
-                        local_logger.error(f"[{username}] ❌ ТАЙМАУТ! Старое лобби не удалилось за 10 секунд!")
-                else:
-                    local_logger.info(f"[{username}] ✓ dota.lobby существует, но нет ID")
-            else:
-                local_logger.info(f"[{username}] ✓ Старых лобби нет")
-        except Exception as e:
-            local_logger.info(f"[{username}] Ошибка проверки старого лобби: {e}")
+            dota.leave_practice_lobby()
+            gevent.sleep(1)
+        except:
+            pass
+        
+        try:
+            dota.destroy_lobby()
+            gevent.sleep(2)
+            local_logger.info(f"[{username}] ✅ Кеш очищен")
+        except:
+            local_logger.info(f"[{username}] ✅ Кеш был пустой")
         
         # 3. Создание лобби
         local_logger.info(f"[{username}] Создание лобби: {lobby_name}")
@@ -276,19 +237,6 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
         gevent.sleep(2)  # Уменьшено с 5 до 2 секунд
         
         if lobby_created.wait(timeout=58):
-            # КРИТИЧЕСКИ ВАЖНО: Проверяем что это НОВОЕ лобби, а не старое из кеша!
-            try:
-                new_lobby_id = dota.lobby.lobby_id if hasattr(dota.lobby, 'lobby_id') else None
-                if new_lobby_id == old_lobby_id:
-                    local_logger.error(f"[{username}] ❌❌❌ ОШИБКА! Valve вернул СТАРОЕ лобби ID={new_lobby_id}!")
-                    local_logger.error(f"[{username}] Турнирное лобби не может быть создано, старое не удалилось!")
-                    result_queue.put({'success': False, 'error': 'Old lobby not deleted'})
-                    return
-                else:
-                    local_logger.info(f"[{username}] ✅ НОВОЕ лобби создано! ID={new_lobby_id} (старое было {old_lobby_id})")
-            except Exception as id_check_error:
-                local_logger.warning(f"[{username}] Не удалось проверить ID нового лобби: {id_check_error}")
-            
             local_logger.info(f"[{username}] Лобби создано! Применяем настройки...")
             
             # ВАЖНО: Применяем настройки к созданному лобби
