@@ -262,14 +262,19 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                 except Exception as e2:
                     local_logger.warning(f"[{username}] Не удалось включить подброс монетки: {e2}")
             
-            # КРИТИЧНО: Бот ДОЛЖЕН присоединиться к команде, иначе Valve удалит "пустое" лобби
-            # Присоединяемся к Radiant как игрок, потом при старте игры переместимся в observer
+            # КРИТИЧНО: Бот присоединяется к observer slot (team=4) чтобы лобби не удалилось
             try:
-                dota.join_practice_lobby_team(team=0, slot=0)  # team=0 это Radiant
-                local_logger.info(f"[{username}] 🟢 Бот временно в Radiant (чтобы лобби не удалилось)")
+                # Сначала занимаем канал трансляции
+                dota.join_practice_lobby_broadcast_channel(channel=1)
+                local_logger.info(f"[{username}] 📡 Занят слот в канале трансляции")
+                gevent.sleep(1)
+                
+                # Затем присоединяемся к слоту наблюдателя
+                dota.join_practice_lobby_team(team=4)
+                local_logger.info(f"[{username}] ✅ Присоединились к слоту наблюдателя (team=4)")
                 gevent.sleep(1)
             except Exception as e:
-                local_logger.warning(f"[{username}] ⚠️ Не удалось присоединиться к команде: {e}")
+                local_logger.warning(f"[{username}] ⚠️ Ошибка входа в observer: {e}")
             
             local_logger.info(f"[{username}] ✅ Лобби полностью настроено!")
             result_queue.put({
@@ -387,22 +392,6 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                     local_logger.info(f"[{username}] 📡 dota.lobby.state = {dota.lobby.state if hasattr(dota.lobby, 'state') else 'N/A'}")
                     
                     gevent.sleep(2)
-                    
-                    # ВАЖНО: Перед запуском игры переходим в observer slot!
-                    # Иначе бот будет в команде Radiant и займёт слот игрока!
-                    try:
-                        # Сначала занимаем канал трансляции
-                        dota.join_practice_lobby_broadcast_channel(channel=1)
-                        local_logger.info(f"[{username}] 📡 Занят слот в канале трансляции")
-                        gevent.sleep(1)
-                        
-                        # Затем присоединяемся к слоту наблюдателя ДО запуска игры
-                        dota.join_practice_lobby_team(team=4)
-                        local_logger.info(f"[{username}] ✅ Переместились в observer перед запуском")
-                        gevent.sleep(1)
-                    except Exception as e:
-                        local_logger.warning(f"[{username}] ⚠️ Не удалось переместиться в observer: {e}")
-                    
                     local_logger.info(f"[{username}] 🚀 ЗАПУСКАЕМ ИГРУ...")
                     dota.launch_practice_lobby()
                     gevent.sleep(5)  # Даём время на запуск
