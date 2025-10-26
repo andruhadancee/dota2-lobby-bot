@@ -60,7 +60,7 @@ logger = logging.getLogger(__name__)
  WAITING_DELETE_CONFIRM, WAITING_GAME_MODE, WAITING_SERIES_TYPE,
  WAITING_MATCH_TEAM1, WAITING_MATCH_TEAM2, WAITING_MATCH_DATE,
  WAITING_MATCH_TIME, WAITING_MATCH_BO, WAITING_MATCH_GAME_MODE,
- WAITING_MATCH_SERIES) = range(16)
+ WAITING_MATCH_SERIES, WAITING_MATCH_LIST) = range(17)
 
 
 def steam_worker_process(username: str, password: str, lobby_name: str, 
@@ -1739,7 +1739,8 @@ class RealDota2BotV2:
         
         # Кнопки управления
         keyboard.append([
-            InlineKeyboardButton("➕ Добавить матч", callback_data="match_add")
+            InlineKeyboardButton("➕ Добавить матч", callback_data="match_add"),
+            InlineKeyboardButton("📋 Добавить список", callback_data="match_add_list")
         ])
         
         if active_matches:
@@ -1844,6 +1845,23 @@ class RealDota2BotV2:
                 parse_mode='HTML'
             )
             return WAITING_MATCH_TEAM1
+        
+        elif data == "match_add_list":
+            # Добавление списка матчей
+            await query.edit_message_text(
+                "<b>📋 Добавление списка матчей</b>\n\n"
+                "Введите список матчей (каждый с новой строки):\n\n"
+                "<b>Формат:</b>\n"
+                "<code>team zxc vs team asd время -18:00, дата 27.10.2025</code>\n"
+                "<code>team abc vs team def время -19:30, дата 28.10.2025</code>\n\n"
+                "<b>Важно:</b>\n"
+                "• Каждый матч с новой строки\n"
+                "• Время в формате HH:MM (часовой пояс МСК)\n"
+                "• Дата в формате ДД.ММ.ГГГГ\n"
+                "• По умолчанию: BO1, Captains Mode",
+                parse_mode='HTML'
+            )
+            return WAITING_MATCH_LIST
         
         elif data == "match_delete_all":
             # Удалить все матчи
@@ -1989,6 +2007,119 @@ class RealDota2BotV2:
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return WAITING_MATCH_GAME_MODE
+    
+    async def handle_match_list_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка ввода списка матчей"""
+        import re
+        from datetime import datetime
+        
+        text = update.message.text.strip()
+        lines = [line.strip() for line in text.split('\n') if line.strip()]
+        
+        if not lines:
+            await update.message.reply_text(
+                "❌ Список матчей пуст!\n\n"
+                "Отправьте список матчей или /cancel для отмены.",
+                parse_mode='HTML'
+            )
+            return WAITING_MATCH_LIST
+        
+        # Проверяем лимит
+        total_accounts = len(self.steam_accounts)
+        existing_matches = len(self.schedule_config.get('matches', []))
+        
+        if existing_matches + len(lines) > total_accounts:
+            await update.message.reply_text(
+                f"❌ Слишком много матчей!\n\n"
+                f"У вас {total_accounts} аккаунтов\n"
+                f"Уже запланировано: {existing_matches}\n"
+                f"Вы пытаетесь добавить: {len(lines)}\n"
+                f"Доступно мест: {total_accounts - existing_matches}\n\n"
+                f"Удалите лишние строки или добавьте больше аккаунтов.",
+                parse_mode='HTML'
+            )
+            return WAITING_MATCH_LIST
+        
+        # Парсим матчи
+        added_matches = []
+        errors = []
+        
+        # Паттерн: team1 vs team2 время -HH:MM, дата DD.MM.YYYY
+        pattern = r'^(.+?)\s+vs\s+(.+?)\s+время\s*-\s*(\d{1,2}:\d{2})\s*,\s*дата\s+(\d{2}\.\d{2}\.\d{4})$'
+        
+        for line_num, line in enumerate(lines, 1):
+            match = re.search(pattern, line, re.IGNORECASE)
+            
+            if not match:
+                errors.append(f"Строка {line_num}: неверный формат")
+                continue
+            
+            team1 = match.group(1).strip()
+            team2 = match.group(2).strip()
+            time_str = match.group(3).strip()
+            date_str = match.group(4).strip()
+            
+            # Проверяем дату
+            try:
+                date_obj = datetime.strptime(date_str, '%d.%m.%Y')
+            except:
+                errors.append(f"Строка {line_num}: неверная дата '{date_str}'")
+                continue
+            
+            # Проверяем время
+            if not re.match(r'^\d{1,2}:\d{2}$', time_str):
+                errors.append(f"Строка {line_num}: неверное время '{time_str}'")
+                continue
+            
+            # Создаём матч (по умолчанию BO1, Captains Mode)
+            match_data = {
+                'id': int(datetime.now().timestamp() * 1000),  # Уникальный ID
+                'team1': team1,
+                'team2': team2,
+                'date': date_str,
+                'time': time_str,
+                'series_type': 'bo1',
+                'game_mode': 'Captains Mode',
+                'enabled': True,
+                'status': 'scheduled'
+            }
+            
+            added_matches.append(match_data)
+        
+        # Сохраняем матчи
+        if added_matches:
+            if 'matches' not in self.schedule_config:
+                self.schedule_config['matches'] = []
+            
+            self.schedule_config['matches'].extend(added_matches)
+            self.save_schedule()
+            self.setup_scheduler()  # Перезапускаем планировщик
+        
+        # Формируем ответ
+        result_message = "<b>📋 Результат добавления матчей:</b>\n\n"
+        
+        if added_matches:
+            result_message += f"✅ <b>Добавлено матчей:</b> {len(added_matches)}\n\n"
+            for m in added_matches:
+                result_message += f"• {m['team1']} vs {m['team2']}\n"
+                result_message += f"  📅 {m['date']} ⏰ {m['time']}\n"
+        
+        if errors:
+            result_message += f"\n❌ <b>Ошибки ({len(errors)}):</b>\n"
+            for error in errors[:5]:  # Показываем первые 5 ошибок
+                result_message += f"• {error}\n"
+            if len(errors) > 5:
+                result_message += f"• ... и ещё {len(errors) - 5}\n"
+        
+        await update.message.reply_text(
+            result_message,
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("◀️ К расписанию", callback_data="schedule")
+            ]])
+        )
+        
+        return ConversationHandler.END
     
     async def handle_match_mode_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Выбор режима игры для матча"""
@@ -2420,6 +2551,7 @@ class RealDota2BotV2:
         match_handler = ConversationHandler(
             entry_points=[
                 CallbackQueryHandler(self.handle_match_action, pattern="^match_add$"),
+                CallbackQueryHandler(self.handle_match_action, pattern="^match_add_list$"),
                 CallbackQueryHandler(self.handle_match_action, pattern="^match_edit_"),
             ],
             states={
@@ -2427,6 +2559,7 @@ class RealDota2BotV2:
                 WAITING_MATCH_TEAM2: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_match_team2_input)],
                 WAITING_MATCH_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_match_date_input)],
                 WAITING_MATCH_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_match_time_input)],
+                WAITING_MATCH_LIST: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_match_list_input)],
                 WAITING_MATCH_GAME_MODE: [CallbackQueryHandler(self.handle_match_mode_selection, pattern="^match_mode_")],
                 WAITING_MATCH_SERIES: [CallbackQueryHandler(self.handle_match_series_selection, pattern="^match_series_")],
             },
