@@ -1433,21 +1433,21 @@ class RealDota2BotV2:
                 logger.info(f"✅ РЕАЛЬНОЕ лобби создано: {lobby_name}")
                 
                 # Создаем объект лобби
-            lobby_info = LobbyInfo(
-                lobby_name=lobby_name,
-                password=password,
-                account=account.username,
-            )
-            
-            # Сохраняем
-            self.active_lobbies[lobby_name] = lobby_info
-            account.is_busy = True
-            account.current_lobby = lobby_name
-            
+                lobby_info = LobbyInfo(
+                    lobby_name=lobby_name,
+                    password=password,
+                    account=account.username,
+                )
+                
+                # Сохраняем
+                self.active_lobbies[lobby_name] = lobby_info
+                account.is_busy = True
+                account.current_lobby = lobby_name
+                
                 # Сохраняем процесс
                 self.active_processes[account.username] = process
                 
-            return lobby_info
+                return lobby_info
             else:
                 error_msg = result.get('error', 'Unknown error') if result else 'Timeout'
                 logger.error(f"❌ Не удалось создать лобби: {error_msg}")
@@ -1599,9 +1599,9 @@ class RealDota2BotV2:
             # Закрываем бота (если есть старый)
             if lobby.account in self.active_bots:
                 try:
-                bot = self.active_bots[lobby.account]
-                bot.destroy_lobby()
-                bot.disconnect()
+                    bot = self.active_bots[lobby.account]
+                    bot.destroy_lobby()
+                    bot.disconnect()
                 except:
                     pass
                 del self.active_bots[lobby.account]
