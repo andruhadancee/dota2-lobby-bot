@@ -173,7 +173,6 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
         gevent.sleep(10)  # Даем время на подключение
         
         # КРИТИЧЕСКИ ВАЖНО: Сохраняем ID старого лобби (если есть)
-        nonlocal old_lobby_id
         try:
             if hasattr(dota, 'lobby') and dota.lobby is not None:
                 old_lobby_id = getattr(dota.lobby, 'lobby_id', None)
