@@ -2308,9 +2308,19 @@ class RealDota2BotV2:
         # Очищаем старые задачи
         self.scheduler.remove_all_jobs()
         
-        # Если расписание выключено - не добавляем задачи
+        # ВАЖНО: Добавляем задачу мониторинга активных лобби (работает всегда, независимо от расписания)
+        self.scheduler.add_job(
+            self.monitor_active_lobbies,
+            'interval',
+            seconds=10,
+            id='monitor_lobbies',
+            replace_existing=True
+        )
+        logger.info("👁️ Добавлена задача мониторинга активных лобби (каждые 10 сек)")
+        
+        # Если расписание выключено - не добавляем задачи матчей
         if not self.schedule_config.get('enabled', False):
-            logger.info("📅 Расписание выключено, задачи не добавлены")
+            logger.info("📅 Расписание выключено, задачи матчей не добавлены")
             return
         
         # Добавляем задачи для каждого активного матча
@@ -2343,16 +2353,6 @@ class RealDota2BotV2:
             
             except Exception as e:
                 logger.error(f"Ошибка добавления задачи для матча {match.get('id')}: {e}")
-        
-        # Добавляем задачу мониторинга активных лобби (выполняется каждые 10 секунд)
-        self.scheduler.add_job(
-            self.monitor_active_lobbies,
-            'interval',
-            seconds=10,
-            id='monitor_lobbies',
-            replace_existing=True
-        )
-        logger.info("👁️ Добавлена задача мониторинга активных лобби (каждые 10 сек)")
         
         # Запускаем планировщик если есть задачи (только если event loop уже запущен)
         if active_matches or True:  # Запускаем всегда для мониторинга
