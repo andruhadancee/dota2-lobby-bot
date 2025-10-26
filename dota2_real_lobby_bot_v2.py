@@ -163,9 +163,29 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
         # ВАЖНО: Сначала удаляем любое старое лобби (если есть)
         local_logger.info(f"[{username}] Проверка и удаление старых лобби...")
         try:
-            dota.destroy_lobby()
-            gevent.sleep(2)  # Даём время на удаление
-            local_logger.info(f"[{username}] Старое лобби удалено (если было)")
+            # Проверяем, есть ли старое лобби
+            if hasattr(dota, 'lobby') and dota.lobby is not None:
+                old_lobby_id = getattr(dota.lobby, 'lobby_id', 'unknown')
+                local_logger.info(f"[{username}] ⚠️ Найдено старое лобби ID={old_lobby_id}, удаляем...")
+                dota.destroy_lobby()
+                gevent.sleep(3)  # Даём время на удаление
+                
+                # ВАЖНО: Проверяем что лобби действительно удалено
+                if hasattr(dota, 'lobby') and dota.lobby is not None:
+                    try:
+                        still_exists_id = dota.lobby.lobby_id
+                        local_logger.warning(f"[{username}] ⚠️⚠️ СТАРОЕ ЛОББИ ВСЁ ЕЩЁ СУЩЕСТВУЕТ! ID={still_exists_id}")
+                        # Пробуем ещё раз
+                        dota.leave_practice_lobby()
+                        gevent.sleep(1)
+                        dota.destroy_lobby()
+                        gevent.sleep(3)
+                    except:
+                        local_logger.info(f"[{username}] ✅ Старое лобби успешно удалено (объект очищен)")
+                else:
+                    local_logger.info(f"[{username}] ✅ Старое лобби удалено")
+            else:
+                local_logger.info(f"[{username}] ✓ Старых лобби нет")
         except Exception as e:
             local_logger.info(f"[{username}] Старых лобби нет или ошибка удаления: {e}")
         
