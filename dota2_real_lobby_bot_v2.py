@@ -399,12 +399,35 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                 
                 # Проверяем, существует ли ещё лобби (игра может закончиться)
                 try:
-                    if not dota.lobby or not hasattr(dota, 'lobby'):
-                        local_logger.info(f"[{username}] 🏁 Лобби закрылось (игра завершена)!")
-                        # Отправляем сообщение о закрытии лобби
+                    # Проверяем разные признаки того, что лобби закрылось
+                    lobby_exists = hasattr(dota, 'lobby') and dota.lobby is not None
+                    
+                    if lobby_exists:
+                        # Дополнительно проверяем, есть ли у лобби обязательные атрибуты
+                        has_members = hasattr(dota.lobby, 'all_members') or hasattr(dota.lobby, 'members')
+                        lobby_id = getattr(dota.lobby, 'lobby_id', None) if hasattr(dota.lobby, 'lobby_id') else None
+                        
+                        local_logger.debug(f"[{username}] 🔍 Проверка лобби: exists={lobby_exists}, has_members={has_members}, lobby_id={lobby_id}")
+                        
+                        # Если лобби существует, но нет ключевых атрибутов - значит закрылось
+                        if not has_members or lobby_id is None:
+                            local_logger.info(f"[{username}] 🏁 Лобби закрылось (игра завершена) - нет атрибутов!")
+                            result_queue.put({'success': False, 'lobby_closed': True})
+                            # ВАЖНО: Даём время основному процессу прочитать сообщение из очереди
+                            local_logger.info(f"[{username}] ⏳ Ожидание обработки сообщения о закрытии (15 секунд)...")
+                            gevent.sleep(15)
+                            break
+                    else:
+                        local_logger.info(f"[{username}] 🏁 Лобби закрылось (игра завершена) - объект не существует!")
                         result_queue.put({'success': False, 'lobby_closed': True})
+                        # ВАЖНО: Даём время основному процессу прочитать сообщение из очереди
+                        local_logger.info(f"[{username}] ⏳ Ожидание обработки сообщения о закрытии (15 секунд)...")
+                        gevent.sleep(15)
                         break
-                except:
+                        
+                except Exception as check_error:
+                    local_logger.debug(f"[{username}] ⚠️ Ошибка проверки лобби: {check_error}")
+                    # Если возникла ошибка при проверке - возможно лобби закрылось
                     pass
             
             # Получена команда закрытия или игра завершена
@@ -2451,11 +2474,16 @@ class RealDota2BotV2:
     async def monitor_active_lobbies(self):
         """Периодически проверяет активные лобби на предмет завершения игры"""
         try:
+            active_count = len(self.result_queues)
+            if active_count > 0:
+                logger.debug(f"👁️ Мониторинг: проверка {active_count} активных лобби...")
+            
             for username, queue in list(self.result_queues.items()):
                 try:
                     # Проверяем очередь без блокировки
                     if not queue.empty():
                         result = queue.get_nowait()
+                        logger.info(f"📨 Получено сообщение из очереди для {username}: {result}")
                         
                         # Если получили сообщение о закрытии лобби
                         if result.get('lobby_closed'):
@@ -2466,6 +2494,8 @@ class RealDota2BotV2:
                                 if account.username == username:
                                     lobby_name = account.current_lobby
                                     
+                                    logger.info(f"🔄 Обновление статуса: аккаунт {username}, лобби {lobby_name}")
+                                    
                                     # Освобождаем аккаунт
                                     account.is_busy = False
                                     account.current_lobby = None
@@ -2474,20 +2504,24 @@ class RealDota2BotV2:
                                     if lobby_name and lobby_name in self.active_lobbies:
                                         del self.active_lobbies[lobby_name]
                                         logger.info(f"✅ Лобби {lobby_name} удалено из активных")
+                                    else:
+                                        logger.warning(f"⚠️ Лобби {lobby_name} не найдено в active_lobbies")
                                     
                                     # Очищаем процесс
                                     if username in self.active_processes:
                                         del self.active_processes[username]
+                                        logger.info(f"🧹 Процесс {username} удален")
                                     if username in self.shutdown_events:
                                         del self.shutdown_events[username]
                                     if username in self.result_queues:
                                         del self.result_queues[username]
                                     
+                                    logger.info(f"✅ Статус бота {username} успешно обновлен в Telegram!")
                                     break
                 except Exception as queue_error:
-                    pass  # Игнорируем ошибки отдельных очередей
+                    logger.error(f"❌ Ошибка проверки очереди для {username}: {queue_error}", exc_info=True)
         except Exception as e:
-            logger.error(f"Ошибка мониторинга лобби: {e}")
+            logger.error(f"❌ Критическая ошибка мониторинга лобби: {e}", exc_info=True)
     
     # ==================== SETUP ====================
     
