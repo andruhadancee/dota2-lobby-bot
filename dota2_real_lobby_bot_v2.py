@@ -313,6 +313,10 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                 local_logger.info(f"[{username}] 🔍 dota.lobby.members существует: {has_members}")
                 
                 if not has_members:
+                    # Выводим ВСЕ атрибуты dota.lobby чтобы понять что доступно
+                    if i == 0:  # Только в первой итерации
+                        all_attrs = [attr for attr in dir(dota.lobby) if not attr.startswith('_')]
+                        local_logger.info(f"[{username}] 📋 Доступные атрибуты dota.lobby: {all_attrs}")
                     local_logger.warning(f"[{username}] ⚠️ dota.lobby не имеет атрибута 'members'!")
                     continue
                 
