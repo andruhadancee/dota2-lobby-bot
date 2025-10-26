@@ -262,20 +262,6 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                 except Exception as e2:
                     local_logger.warning(f"[{username}] Не удалось включить подброс монетки: {e2}")
             
-            # ВАЖНО: Заходим в слот наблюдателя (team=4) чтобы загрузиться в игру
-            try:
-                # Сначала занимаем канал трансляции
-                dota.join_practice_lobby_broadcast_channel(channel=1)
-                local_logger.info(f"[{username}] Занят слот в канале трансляции")
-                gevent.sleep(1)
-                
-                # Затем присоединяемся к слоту наблюдателя чтобы загрузиться в игру
-                dota.join_practice_lobby_team(team=4)
-                local_logger.info(f"[{username}] ✅ Присоединились к слоту наблюдателя (team=4)")
-                gevent.sleep(1)
-            except Exception as e:
-                local_logger.warning(f"[{username}] Ошибка входа: {e}")
-            
             local_logger.info(f"[{username}] ✅ Лобби полностью настроено!")
             result_queue.put({
                 'success': True,
@@ -397,6 +383,21 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                     gevent.sleep(5)  # Даём время на запуск
                     
                     local_logger.info(f"[{username}] 🎮🎮🎮 ИГРА ЗАПУЩЕНА! Бот загружается как наблюдатель!")
+                    
+                    # ВАЖНО: Теперь присоединяемся к observer slot чтобы загрузиться в игру
+                    try:
+                        # Сначала занимаем канал трансляции
+                        dota.join_practice_lobby_broadcast_channel(channel=1)
+                        local_logger.info(f"[{username}] 📡 Занят слот в канале трансляции")
+                        gevent.sleep(1)
+                        
+                        # Затем присоединяемся к слоту наблюдателя чтобы загрузиться в игру
+                        dota.join_practice_lobby_team(team=4)
+                        local_logger.info(f"[{username}] ✅ Присоединились к слоту наблюдателя для загрузки в игру")
+                        gevent.sleep(2)
+                    except Exception as e:
+                        local_logger.warning(f"[{username}] ⚠️ Не удалось присоединиться к observer: {e}")
+                    
                     game_started = True
                     break
                 else:
