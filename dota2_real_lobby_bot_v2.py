@@ -1432,12 +1432,12 @@ class RealDota2BotV2:
             result = None
             
             while time.time() - start_time < max_wait_time:
-                await asyncio.sleep(2)
+            await asyncio.sleep(2)
             
                 # Обновляем статус каждые 10 секунд
                 elapsed = int(time.time() - start_time)
                 if elapsed % 10 == 0:
-                    await status_msg.edit_text(
+            await status_msg.edit_text(
                         f"⏳ <b>Создание реального лобби</b>\n\n"
                         f"🤖 Аккаунт: {account.username}\n"
                         f"🏷️ Название: {lobby_name}\n"
@@ -1623,9 +1623,9 @@ class RealDota2BotV2:
             # Закрываем бота (если есть старый)
             if lobby.account in self.active_bots:
                 try:
-                bot = self.active_bots[lobby.account]
-                bot.destroy_lobby()
-                bot.disconnect()
+                    bot = self.active_bots[lobby.account]
+                    bot.destroy_lobby()
+                    bot.disconnect()
                 except:
                     pass
                 del self.active_bots[lobby.account]
