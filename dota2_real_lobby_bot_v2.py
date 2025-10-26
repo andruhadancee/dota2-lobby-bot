@@ -1194,6 +1194,19 @@ class RealDota2BotV2:
         message += "<b>🎮 Лобби созданы в игре!</b>\n"
         message += "<i>Игроки ищут по названию: wb cup 1, wb cup 2...</i>"
         
+        # Для уведомления в группу - делаем весь текст жирным
+        group_message = f"<b>✅ Создано {len(created_lobbies)} лобби!\n\n"
+        group_message += f"🎮 Режим: {game_mode}\n"
+        group_message += f"🎯 Серия: {series_type.upper()}\n\n"
+        
+        for idx, lobby in enumerate(created_lobbies, 1):
+            group_message += f"{idx}. {lobby.lobby_name}\n"
+            group_message += f"🔒 Пароль: <code>{lobby.password}</code>\n"
+            group_message += f"🤖 Бот: {lobby.account}\n\n"
+        
+        group_message += "🎮 Лобби созданы в игре!\n"
+        group_message += "Игроки ищут по названию: wb cup 1, wb cup 2...</b>"
+        
         await status_msg.edit_text(
             message,
             parse_mode='HTML',
@@ -1205,7 +1218,7 @@ class RealDota2BotV2:
             try:
                 send_kwargs = {
                     'chat_id': self.notification_chat_id,
-                    'text': message,
+                    'text': group_message,
                     'parse_mode': 'HTML'
                 }
                 # Если указан ID топика - отправляем в топик
@@ -2071,55 +2084,68 @@ class RealDota2BotV2:
                 errors.append(f"Строка {line_num}: неверное время '{time_str}'")
                 continue
             
-            # Создаём матч (по умолчанию BO1, Captains Mode)
+            # Создаём матч (настройки будут добавлены после выбора)
             match_data = {
-                'id': int(datetime.now().timestamp() * 1000),  # Уникальный ID
+                'id': int(datetime.now().timestamp() * 1000 + line_num),  # Уникальный ID
                 'team1': team1,
                 'team2': team2,
                 'date': date_str,
                 'time': time_str,
-                'series_type': 'bo1',
-                'game_mode': 'Captains Mode',
-                'enabled': True,
-                'status': 'scheduled'
             }
             
             added_matches.append(match_data)
         
-        # Сохраняем матчи
-        if added_matches:
-            if 'matches' not in self.schedule_config:
-                self.schedule_config['matches'] = []
+        # Если есть ошибки и нет успешных матчей - показываем ошибки и выходим
+        if errors and not added_matches:
+            error_message = "<b>❌ Не удалось распарсить матчи!</b>\n\n"
+            for error in errors[:10]:
+                error_message += f"• {error}\n"
+            if len(errors) > 10:
+                error_message += f"• ... и ещё {len(errors) - 10}\n"
+            error_message += "\n<b>Проверьте формат:</b>\n"
+            error_message += "<code>team1 vs team2 время -18:00, дата 27.10.2025</code>"
             
-            self.schedule_config['matches'].extend(added_matches)
-            self.save_schedule()
-            self.setup_scheduler()  # Перезапускаем планировщик
+            await update.message.reply_text(
+                error_message,
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("◀️ К расписанию", callback_data="schedule")
+                ]])
+            )
+            return ConversationHandler.END
         
-        # Формируем ответ
-        result_message = "<b>📋 Результат добавления матчей:</b>\n\n"
+        # Сохраняем распарсенные матчи во временное хранилище
+        context.user_data['bulk_matches'] = added_matches
+        context.user_data['bulk_errors'] = errors
         
-        if added_matches:
-            result_message += f"✅ <b>Добавлено матчей:</b> {len(added_matches)}\n\n"
-            for m in added_matches:
-                result_message += f"• {m['team1']} vs {m['team2']}\n"
-                result_message += f"  📅 {m['date']} ⏰ {m['time']}\n"
+        # Показываем сводку и переходим к выбору режима игры
+        summary = f"<b>✅ Распознано матчей: {len(added_matches)}</b>\n\n"
+        for m in added_matches[:5]:  # Показываем первые 5
+            summary += f"• {m['team1']} vs {m['team2']}\n"
+            summary += f"  📅 {m['date']} ⏰ {m['time']}\n"
+        if len(added_matches) > 5:
+            summary += f"• ... и ещё {len(added_matches) - 5}\n"
         
         if errors:
-            result_message += f"\n❌ <b>Ошибки ({len(errors)}):</b>\n"
-            for error in errors[:5]:  # Показываем первые 5 ошибок
-                result_message += f"• {error}\n"
-            if len(errors) > 5:
-                result_message += f"• ... и ещё {len(errors) - 5}\n"
+            summary += f"\n⚠️ <b>Ошибок:</b> {len(errors)}\n"
+        
+        summary += "\n<b>Выберите режим игры для всех матчей:</b>"
+        
+        keyboard = [
+            [InlineKeyboardButton("⚔️ Captains Mode", callback_data="match_mode_Captains Mode")],
+            [InlineKeyboardButton("🎲 All Pick", callback_data="match_mode_All Pick")],
+            [InlineKeyboardButton("📋 Captains Draft", callback_data="match_mode_Captains Draft")],
+            [InlineKeyboardButton("🎯 Mid Only", callback_data="match_mode_Mid Only")],
+            [InlineKeyboardButton("🥊 1v1 Solo Mid", callback_data="match_mode_1v1 Solo Mid")],
+        ]
         
         await update.message.reply_text(
-            result_message,
+            summary,
             parse_mode='HTML',
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("◀️ К расписанию", callback_data="schedule")
-            ]])
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
         
-        return ConversationHandler.END
+        return WAITING_MATCH_GAME_MODE
     
     async def handle_match_mode_selection(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Выбор режима игры для матча"""
@@ -2148,13 +2174,69 @@ class RealDota2BotV2:
         query = update.callback_query
         series_type = query.data.replace("match_series_", "")
         context.user_data['match_series_type'] = series_type
+        game_mode = context.user_data.get('match_game_mode')
         
+        # Проверяем, это массовое добавление или одиночное
+        bulk_matches = context.user_data.get('bulk_matches')
+        
+        if bulk_matches:
+            # МАССОВОЕ добавление матчей из списка
+            bulk_errors = context.user_data.get('bulk_errors', [])
+            
+            # Применяем настройки ко всем матчам
+            for match in bulk_matches:
+                match['game_mode'] = game_mode
+                match['series_type'] = series_type
+                match['enabled'] = True
+                match['status'] = 'scheduled'
+            
+            # Сохраняем все матчи
+            if 'matches' not in self.schedule_config:
+                self.schedule_config['matches'] = []
+            
+            self.schedule_config['matches'].extend(bulk_matches)
+            self.save_schedule()
+            self.setup_scheduler()
+            
+            # Формируем отчёт
+            result_message = "<b>✅ Матчи добавлены в расписание!</b>\n\n"
+            result_message += f"<b>Режим игры:</b> {game_mode}\n"
+            result_message += f"<b>Серия:</b> {series_type.upper()}\n"
+            result_message += f"<b>Добавлено матчей:</b> {len(bulk_matches)}\n\n"
+            
+            for m in bulk_matches[:5]:
+                result_message += f"• {m['team1']} vs {m['team2']}\n"
+                result_message += f"  📅 {m['date']} ⏰ {m['time']}\n"
+            if len(bulk_matches) > 5:
+                result_message += f"• ... и ещё {len(bulk_matches) - 5}\n"
+            
+            if bulk_errors:
+                result_message += f"\n⚠️ <b>Строк с ошибками:</b> {len(bulk_errors)}"
+            
+            await query.edit_message_text(
+                result_message,
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("◀️ К расписанию", callback_data="schedule")
+                ]])
+            )
+            
+            # Очищаем временные данные
+            if 'bulk_matches' in context.user_data:
+                del context.user_data['bulk_matches']
+            if 'bulk_errors' in context.user_data:
+                del context.user_data['bulk_errors']
+            if 'match_game_mode' in context.user_data:
+                del context.user_data['match_game_mode']
+            
+            return ConversationHandler.END
+        
+        # ОДИНОЧНОЕ добавление матча
         # Собираем все данные
         team1 = context.user_data.get('match_team1')
         team2 = context.user_data.get('match_team2')
         date = context.user_data.get('match_date')
         time_str = context.user_data.get('match_time')
-        game_mode = context.user_data.get('match_game_mode')
         
         # Проверяем, редактируем или создаём
         editing_match_id = context.user_data.get('editing_match_id')
@@ -2303,7 +2385,8 @@ class RealDota2BotV2:
                     run_date=run_date,
                     args=[match],
                     id=f"match_{match['id']}",
-                    replace_existing=True
+                    replace_existing=True,
+                    max_instances=10  # Разрешаем до 10 одновременных создания лобби
                 )
                 
                 logger.info(f"📅 Добавлена задача: {match['team1']} vs {match['team2']} на {date_str} {time_str}")
