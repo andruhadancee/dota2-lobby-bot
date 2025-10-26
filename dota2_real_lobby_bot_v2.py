@@ -285,9 +285,14 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
         
         dota.on('lobby_changed', on_lobby_event)
         
+        local_logger.info(f"[{username}] 🔄 НАЧИНАЕМ ЦИКЛ ПРОВЕРКИ ИГРОКОВ...")
+        
         # Проверяем каждые 3 секунды (100 раз = 5 минут)
         for i in range(100):
             gevent.sleep(3)
+            
+            # ЛОГИРУЕМ КАЖДУЮ ИТЕРАЦИЮ!
+            local_logger.info(f"[{username}] ⏱️ Итерация проверки #{i+1}/100")
             
             # Проверяем команду закрытия
             if shutdown_event.is_set():
@@ -296,54 +301,61 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
             
             # Проверяем состояние лобби
             try:
-                # ДЕБАГ: проверяем есть ли вообще лобби
-                if i == 0 or i % 10 == 0:  # Каждые 30 секунд
-                    local_logger.info(f"[{username}] 🔍 DEBUG: dota.lobby={'exists' if dota.lobby else 'None'}")
-                    if dota.lobby:
-                        local_logger.info(f"[{username}] 🔍 DEBUG: hasattr members={hasattr(dota.lobby, 'members')}")
-                        if hasattr(dota.lobby, 'members'):
-                            local_logger.info(f"[{username}] 🔍 DEBUG: len(members)={len(dota.lobby.members)}")
+                # ВСЕГДА логируем состояние dota.lobby
+                lobby_exists = dota.lobby is not None
+                local_logger.info(f"[{username}] 🔍 dota.lobby существует: {lobby_exists}")
                 
-                if dota.lobby and hasattr(dota.lobby, 'members'):
-                    lobby = dota.lobby
+                if not lobby_exists:
+                    local_logger.warning(f"[{username}] ⚠️ dota.lobby = None! Пропускаем проверку.")
+                    continue
+                
+                has_members = hasattr(dota.lobby, 'members')
+                local_logger.info(f"[{username}] 🔍 dota.lobby.members существует: {has_members}")
+                
+                if not has_members:
+                    local_logger.warning(f"[{username}] ⚠️ dota.lobby не имеет атрибута 'members'!")
+                    continue
+                
+                members_count = len(dota.lobby.members)
+                local_logger.info(f"[{username}] 🔍 Членов в лобби: {members_count}")
+                
+                if members_count == 0:
+                    local_logger.info(f"[{username}] ⏳ Лобби пустое, ждем игроков...")
+                    continue
+                
+                # Есть игроки! Логируем детали
+                lobby = dota.lobby
+                local_logger.info(f"[{username}] 👥 НАЙДЕНЫ ИГРОКИ ({members_count}):")
+                
+                for idx, member in enumerate(lobby.members):
+                    team_name = "Radiant" if member.team == 0 else "Dire" if member.team == 1 else f"Unknown({member.team})"
+                    local_logger.info(f"[{username}]   Игрок {idx+1}: team={team_name} ({member.team})")
+                
+                # Подсчитываем игроков в командах
+                radiant_players = sum(1 for m in lobby.members if m.team == 0)  # 0 = Radiant
+                dire_players = sum(1 for m in lobby.members if m.team == 1)     # 1 = Dire
+                total_players = radiant_players + dire_players
+                
+                local_logger.info(f"[{username}] 📊 Счет: Radiant={radiant_players}, Dire={dire_players}, Всего={total_players}/{total_required}")
+                
+                # Проверяем готовность в зависимости от режима
+                if radiant_players == required_radiant and dire_players == required_dire:
+                    if is_1v1:
+                        local_logger.info(f"[{username}] ✅✅✅ 2 ИГРОКА ГОТОВЫ (1 vs 1)! ЗАПУСКАЕМ ИГРУ...")
+                    else:
+                        local_logger.info(f"[{username}] ✅✅✅ 10 ИГРОКОВ ГОТОВЫ (5 vs 5)! ЗАПУСКАЕМ ИГРУ...")
                     
-                    # ДЕБАГ: логируем ВСЕХ членов лобби каждую итерацию если есть игроки
-                    if len(lobby.members) > 0:
-                        local_logger.info(f"[{username}] 🔍 DEBUG: Членов в лобби: {len(lobby.members)}")
-                        for idx, member in enumerate(lobby.members):
-                            local_logger.info(f"[{username}]   Игрок {idx+1}: team={member.team}, slot={member.slot if hasattr(member, 'slot') else '?'}")
-                    
-                    # Подсчитываем игроков в командах
-                    radiant_players = sum(1 for m in lobby.members if m.team == 0)  # 0 = Radiant
-                    dire_players = sum(1 for m in lobby.members if m.team == 1)     # 1 = Dire
-                    total_players = radiant_players + dire_players
-                    
-                    # ДЕБАГ: логируем состояние команд
-                    if total_players > 0:
-                        local_logger.info(f"[{username}] 📊 DEBUG: Radiant={radiant_players}, Dire={dire_players}, Total={total_players}/{total_required}")
-                    
-                    # Проверяем готовность в зависимости от режима
-                    if radiant_players == required_radiant and dire_players == required_dire:
-                        if is_1v1:
-                            local_logger.info(f"[{username}] ✅ 2 игрока готовы (1 vs 1)! ЗАПУСК...")
-                        else:
-                            local_logger.info(f"[{username}] ✅ 10 игроков готовы (5 vs 5)! ЗАПУСК...")
-                        
-                        gevent.sleep(2)
-                        dota.launch_practice_lobby()
-                        gevent.sleep(3)
-                        local_logger.info(f"[{username}] 🎮 Игра запущена!")
-                        game_started = True
-                        break
-                    
-                    # Если есть игроки, но не нужное количество - предупреждаем один раз
-                    elif total_players > 0 and not players_warned:
-                        local_logger.info(f"[{username}] ⏳ Ожидание игроков... ({total_players}/{total_required})")
-                        players_warned = True
+                    gevent.sleep(2)
+                    dota.launch_practice_lobby()
+                    gevent.sleep(3)
+                    local_logger.info(f"[{username}] 🎮🎮🎮 ИГРА ЗАПУЩЕНА!")
+                    game_started = True
+                    break
+                else:
+                    local_logger.info(f"[{username}] ⏳ Недостаточно игроков. Нужно: Radiant={required_radiant}, Dire={required_dire}")
                         
             except Exception as check_error:
-                # Не спамим логами при каждой проверке
-                pass
+                local_logger.error(f"[{username}] ❌ ОШИБКА при проверке игроков: {check_error}", exc_info=True)
         
         # ВАЖНО: Явно удаляем лобби ПЕРЕД отключением (но только если игра не запущена)
         if not game_started:
@@ -1396,12 +1408,12 @@ class RealDota2BotV2:
             result = None
             
             while time.time() - start_time < max_wait_time:
-            await asyncio.sleep(2)
-            
+                await asyncio.sleep(2)
+                
                 # Обновляем статус каждые 10 секунд
                 elapsed = int(time.time() - start_time)
                 if elapsed % 10 == 0:
-            await status_msg.edit_text(
+                    await status_msg.edit_text(
                         f"⏳ <b>Создание реального лобби</b>\n\n"
                         f"🤖 Аккаунт: {account.username}\n"
                         f"🏷️ Название: {lobby_name}\n"
