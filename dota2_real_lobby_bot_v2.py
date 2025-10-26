@@ -309,18 +309,15 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                     local_logger.warning(f"[{username}] ⚠️ dota.lobby = None! Пропускаем проверку.")
                     continue
                 
-                has_members = hasattr(dota.lobby, 'members')
-                local_logger.info(f"[{username}] 🔍 dota.lobby.members существует: {has_members}")
+                # Используем all_members вместо members
+                has_members = hasattr(dota.lobby, 'all_members')
+                local_logger.info(f"[{username}] 🔍 dota.lobby.all_members существует: {has_members}")
                 
                 if not has_members:
-                    # Выводим ВСЕ атрибуты dota.lobby чтобы понять что доступно
-                    if i == 0:  # Только в первой итерации
-                        all_attrs = [attr for attr in dir(dota.lobby) if not attr.startswith('_')]
-                        local_logger.info(f"[{username}] 📋 Доступные атрибуты dota.lobby: {all_attrs}")
-                    local_logger.warning(f"[{username}] ⚠️ dota.lobby не имеет атрибута 'members'!")
+                    local_logger.warning(f"[{username}] ⚠️ dota.lobby не имеет атрибута 'all_members'!")
                     continue
                 
-                members_count = len(dota.lobby.members)
+                members_count = len(dota.lobby.all_members)
                 local_logger.info(f"[{username}] 🔍 Членов в лобби: {members_count}")
                 
                 if members_count == 0:
@@ -331,13 +328,13 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                 lobby = dota.lobby
                 local_logger.info(f"[{username}] 👥 НАЙДЕНЫ ИГРОКИ ({members_count}):")
                 
-                for idx, member in enumerate(lobby.members):
+                for idx, member in enumerate(lobby.all_members):
                     team_name = "Radiant" if member.team == 0 else "Dire" if member.team == 1 else f"Unknown({member.team})"
                     local_logger.info(f"[{username}]   Игрок {idx+1}: team={team_name} ({member.team})")
                 
                 # Подсчитываем игроков в командах
-                radiant_players = sum(1 for m in lobby.members if m.team == 0)  # 0 = Radiant
-                dire_players = sum(1 for m in lobby.members if m.team == 1)     # 1 = Dire
+                radiant_players = sum(1 for m in lobby.all_members if m.team == 0)  # 0 = Radiant
+                dire_players = sum(1 for m in lobby.all_members if m.team == 1)     # 1 = Dire
                 total_players = radiant_players + dire_players
                 
                 local_logger.info(f"[{username}] 📊 Счет: Radiant={radiant_players}, Dire={dire_players}, Всего={total_players}/{total_required}")
