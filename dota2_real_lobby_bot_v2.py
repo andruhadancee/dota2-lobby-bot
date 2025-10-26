@@ -1532,14 +1532,14 @@ class RealDota2BotV2:
                     account=account.username,
                 )
                 
-                # Сохраняем статус
+                # КРИТИЧЕСКИ ВАЖНО: Сохраняем процесс и очередь ПЕРВЫМИ для мониторинга
+                self.active_processes[account.username] = process
+                self.result_queues[account.username] = result_queue
+                
+                # Теперь обновляем статусы (после сохранения очереди!)
                 self.active_lobbies[lobby_name] = lobby_info
                 account.is_busy = True
                 account.current_lobby = lobby_name
-                
-                # ВАЖНО: Сразу после обновления статуса сохраняем процесс и очередь для мониторинга
-                self.active_processes[account.username] = process
-                self.result_queues[account.username] = result_queue
                 
                 return lobby_info
             else:
