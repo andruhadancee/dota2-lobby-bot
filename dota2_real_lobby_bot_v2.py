@@ -160,18 +160,22 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
         # Ждем подключения к координатору (макс 60 сек)
         gevent.sleep(10)  # Даем время на подключение
         
-        # Очищаем любой кеш лобби (при подключении может быть мусор)
-        try:
-            dota.leave_practice_lobby()
-            gevent.sleep(1)
-        except:
-            pass
+        # КРИТИЧНО: Агрессивная очистка ВСЕХ старых турнирных лобби
+        local_logger.info(f"[{username}] 🧹 Очистка старых турнирных лобби...")
+        for attempt in range(3):  # 3 попытки очистки
+            try:
+                dota.leave_practice_lobby()
+                gevent.sleep(1)
+            except:
+                pass
+            
+            try:
+                dota.destroy_lobby()
+                gevent.sleep(2)
+            except:
+                pass
         
-        try:
-            dota.destroy_lobby()
-            gevent.sleep(2)
-        except:
-            pass
+        local_logger.info(f"[{username}] ✅ Очистка завершена, готовы создать новое лобби")
         
         # 3. Создание лобби
         local_logger.info(f"[{username}] Создание лобби: {lobby_name}")
@@ -303,9 +307,6 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
         for i in range(700):
             gevent.sleep(3)
             
-            # ЛОГИРУЕМ КАЖДУЮ ИТЕРАЦИЮ!
-            local_logger.info(f"[{username}] ⏱️ Итерация проверки #{i+1}/700")
-            
             # Проверяем команду закрытия
             if shutdown_event.is_set():
                 local_logger.info(f"[{username}] 🛑 Получена команда закрытия лобби!")
@@ -313,20 +314,11 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
             
             # Проверяем состояние лобби
             try:
-                # ВСЕГДА логируем состояние dota.lobby
+                # Проверяем что лобби еще существует
                 lobby_exists = dota.lobby is not None
-                local_logger.info(f"[{username}] 🔍 dota.lobby существует: {lobby_exists}")
                 
                 if not lobby_exists:
-                    local_logger.warning(f"[{username}] ⚠️ dota.lobby = None! Пропускаем проверку.")
-                    continue
-                
-                # КРИТИЧНО: Проверяем что лобби РЕАЛЬНО существует (не кешированный объект)
-                try:
-                    lobby_id = dota.lobby.lobby_id
-                    local_logger.info(f"[{username}] 🆔 Lobby ID: {lobby_id}")
-                except Exception as e:
-                    local_logger.error(f"[{username}] ❌ Лобби НЕ СУЩЕСТВУЕТ (ошибка доступа к lobby_id): {e}")
+                    local_logger.warning(f"[{username}] ⚠️ dota.lobby = None! Лобби закрылось.")
                     if not game_started:
                         result_queue.put({'success': False, 'lobby_closed': True})
                         local_logger.info(f"[{username}] ⏳ Ожидание обработки сообщения о закрытии (15 секунд)...")
@@ -334,34 +326,20 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                     break
                 
                 # Используем all_members вместо members
-                has_members = hasattr(dota.lobby, 'all_members')
-                local_logger.info(f"[{username}] 🔍 dota.lobby.all_members существует: {has_members}")
-                
-                if not has_members:
-                    local_logger.warning(f"[{username}] ⚠️ dota.lobby не имеет атрибута 'all_members'!")
+                if not hasattr(dota.lobby, 'all_members'):
                     continue
                 
                 members_count = len(dota.lobby.all_members)
-                local_logger.info(f"[{username}] 🔍 Членов в лобби: {members_count}")
                 
                 if members_count == 0:
-                    local_logger.info(f"[{username}] ⏳ Лобби пустое, ждем игроков...")
                     continue
                 
-                # Есть игроки! Логируем детали
+                # Есть игроки! Проверяем их команды
                 lobby = dota.lobby
-                local_logger.info(f"[{username}] 👥 НАЙДЕНЫ ИГРОКИ ({members_count}):")
-                
-                for idx, member in enumerate(lobby.all_members):
-                    team_name = "Radiant" if member.team == 0 else "Dire" if member.team == 1 else f"Unknown({member.team})"
-                    local_logger.info(f"[{username}]   Игрок {idx+1}: team={team_name} ({member.team})")
                 
                 # Подсчитываем игроков в командах
                 radiant_players = sum(1 for m in lobby.all_members if m.team == 0)  # 0 = Radiant
                 dire_players = sum(1 for m in lobby.all_members if m.team == 1)     # 1 = Dire
-                total_players = radiant_players + dire_players
-                
-                local_logger.info(f"[{username}] 📊 Счет: Radiant={radiant_players}, Dire={dire_players}, Всего={total_players}/{total_required}")
                 
                 # Проверяем готовность в зависимости от режима
                 if radiant_players == required_radiant and dire_players == required_dire:
@@ -383,8 +361,6 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                     
                     game_started = True
                     break
-                else:
-                    local_logger.info(f"[{username}] ⏳ Недостаточно игроков. Нужно: Radiant={required_radiant}, Dire={required_dire}")
                         
             except Exception as check_error:
                 local_logger.error(f"[{username}] ❌ ОШИБКА при проверке игроков: {check_error}", exc_info=True)
@@ -418,27 +394,10 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                 
                 # Проверяем, существует ли ещё лобби (игра может закончиться)
                 try:
-                    # Проверяем разные признаки того, что лобби закрылось
-                    lobby_exists = hasattr(dota, 'lobby') and dota.lobby is not None
-                    
-                    local_logger.info(f"[{username}] 🔍 Проверка лобби после игры: exists={lobby_exists}")
-                    
-                    if lobby_exists:
-                        # Дополнительно проверяем, есть ли у лобби обязательные атрибуты
-                        try:
-                            lobby_id = dota.lobby.lobby_id
-                            local_logger.info(f"[{username}] 🔍 Лобби всё ещё существует, ID={lobby_id}")
-                        except:
-                            local_logger.info(f"[{username}] 🏁 Лобби закрылось (игра завершена) - нет lobby_id!")
-                            result_queue.put({'success': False, 'lobby_closed': True})
-                            local_logger.info(f"[{username}] ⏳ Ожидание обработки сообщения о закрытии (15 секунд)...")
-                            gevent.sleep(15)
-                            break
-                    else:
-                        local_logger.info(f"[{username}] 🏁 Лобби закрылось (игра завершена) - объект не существует!")
+                    if dota.lobby is None:
+                        local_logger.info(f"[{username}] 🏁 Лобби закрылось (игра завершена)!")
                         result_queue.put({'success': False, 'lobby_closed': True})
-                        local_logger.info(f"[{username}] ⏳ Ожидание обработки сообщения о закрытии (15 секунд)...")
-                        gevent.sleep(15)
+                        gevent.sleep(15)  # Даем время главному процессу
                         break
                         
                 except Exception as check_error:
