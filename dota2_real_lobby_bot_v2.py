@@ -2539,14 +2539,15 @@ class RealDota2BotV2:
             
             for username, queue in list(self.result_queues.items()):
                 try:
-                    # Проверяем, не закрыта ли очередь (процесс завершился)
-                    if queue._closed:
-                        logger.info(f"📭 Очередь для {username} закрыта - процесс завершился")
+                    # Проверяем, жив ли процесс (вместо проверки очереди!)
+                    process = self.active_processes.get(username)
+                    if process and not process.is_alive():
+                        logger.info(f"💀 Процесс {username} завершился - обновляем статус")
                         # Процесс завершился, обновляем статус
                         self._cleanup_lobby_for_username(username)
                         continue
                     
-                    # Проверяем очередь без блокировки
+                    # Проверяем очередь без блокировки (только если процесс жив!)
                     if not queue.empty():
                         result = queue.get_nowait()
                         logger.info(f"📨 Получено сообщение из очереди для {username}: {result}")
