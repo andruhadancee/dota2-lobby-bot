@@ -2471,6 +2471,42 @@ class RealDota2BotV2:
         except Exception as e:
             logger.error(f"Ошибка выполнения запланированного матча: {e}", exc_info=True)
     
+    def _cleanup_lobby_for_username(self, username: str):
+        """Очищает все данные для указанного username и обновляет статус в Telegram"""
+        try:
+            # Находим аккаунт и лобби
+            for account in self.steam_accounts:
+                if account.username == username:
+                    lobby_name = account.current_lobby
+                    
+                    logger.info(f"🔄 Обновление статуса: аккаунт {username}, лобби {lobby_name}")
+                    
+                    # Освобождаем аккаунт
+                    account.is_busy = False
+                    account.current_lobby = None
+                    
+                    # Удаляем лобби из активных
+                    if lobby_name and lobby_name in self.active_lobbies:
+                        del self.active_lobbies[lobby_name]
+                        logger.info(f"✅ Лобби {lobby_name} удалено из активных")
+                    else:
+                        if lobby_name:
+                            logger.warning(f"⚠️ Лобби {lobby_name} не найдено в active_lobbies")
+                    
+                    # Очищаем процесс
+                    if username in self.active_processes:
+                        del self.active_processes[username]
+                        logger.info(f"🧹 Процесс {username} удален")
+                    if username in self.shutdown_events:
+                        del self.shutdown_events[username]
+                    if username in self.result_queues:
+                        del self.result_queues[username]
+                    
+                    logger.info(f"✅ Статус бота {username} успешно обновлен в Telegram!")
+                    break
+        except Exception as e:
+            logger.error(f"❌ Ошибка очистки для {username}: {e}", exc_info=True)
+    
     async def monitor_active_lobbies(self):
         """Периодически проверяет активные лобби на предмет завершения игры"""
         try:
@@ -2480,6 +2516,13 @@ class RealDota2BotV2:
             
             for username, queue in list(self.result_queues.items()):
                 try:
+                    # Проверяем, не закрыта ли очередь (процесс завершился)
+                    if queue._closed:
+                        logger.info(f"📭 Очередь для {username} закрыта - процесс завершился")
+                        # Процесс завершился, обновляем статус
+                        self._cleanup_lobby_for_username(username)
+                        continue
+                    
                     # Проверяем очередь без блокировки
                     if not queue.empty():
                         result = queue.get_nowait()
@@ -2488,36 +2531,7 @@ class RealDota2BotV2:
                         # Если получили сообщение о закрытии лобби
                         if result.get('lobby_closed'):
                             logger.info(f"🏁 Лобби для {username} закрылось (игра завершена)")
-                            
-                            # Находим аккаунт и лобби
-                            for account in self.steam_accounts:
-                                if account.username == username:
-                                    lobby_name = account.current_lobby
-                                    
-                                    logger.info(f"🔄 Обновление статуса: аккаунт {username}, лобби {lobby_name}")
-                                    
-                                    # Освобождаем аккаунт
-                                    account.is_busy = False
-                                    account.current_lobby = None
-                                    
-                                    # Удаляем лобби из активных
-                                    if lobby_name and lobby_name in self.active_lobbies:
-                                        del self.active_lobbies[lobby_name]
-                                        logger.info(f"✅ Лобби {lobby_name} удалено из активных")
-                                    else:
-                                        logger.warning(f"⚠️ Лобби {lobby_name} не найдено в active_lobbies")
-                                    
-                                    # Очищаем процесс
-                                    if username in self.active_processes:
-                                        del self.active_processes[username]
-                                        logger.info(f"🧹 Процесс {username} удален")
-                                    if username in self.shutdown_events:
-                                        del self.shutdown_events[username]
-                                    if username in self.result_queues:
-                                        del self.result_queues[username]
-                                    
-                                    logger.info(f"✅ Статус бота {username} успешно обновлен в Telegram!")
-                                    break
+                            self._cleanup_lobby_for_username(username)
                 except Exception as queue_error:
                     logger.error(f"❌ Ошибка проверки очереди для {username}: {queue_error}", exc_info=True)
         except Exception as e:
