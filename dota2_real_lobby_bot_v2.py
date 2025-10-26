@@ -247,16 +247,16 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                 local_logger.info(f"[{username}] Настройки применены")
                 gevent.sleep(1)
                 
-                # Для Captains Mode: устанавливаем порядок выбора (бросок монетки)
-                if mode == 'Captains Mode':
-                    try:
-                        dota.config_practice_lobby(options={
-                            'selection_priority': 1,  # 1 = DOTA_CM_RANDOM (бросок монетки)
-                        })
-                        local_logger.info(f"[{username}] ✅ Установлен порядок выбора: бросок монетки")
-                        gevent.sleep(0.5)
-                    except Exception as cm_error:
-                        local_logger.warning(f"[{username}] Не удалось установить бросок монетки: {cm_error}")
+                # Устанавливаем порядок выбора (бросок монетки) для всех режимов
+                # Для режимов без драфта (All Pick, Mid Only, 1v1) параметр будет проигнорирован
+                try:
+                    dota.config_practice_lobby(options={
+                        'selection_priority': 1,  # 1 = DOTA_CM_RANDOM (бросок монетки)
+                    })
+                    local_logger.info(f"[{username}] ✅ Установлен порядок выбора: бросок монетки")
+                    gevent.sleep(0.5)
+                except Exception as cm_error:
+                    local_logger.warning(f"[{username}] Не удалось установить бросок монетки: {cm_error}")
             except Exception as e:
                 local_logger.warning(f"[{username}] Ошибка применения настроек: {e}")
             
