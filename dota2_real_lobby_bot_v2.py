@@ -2476,7 +2476,7 @@ class RealDota2BotV2:
         try:
             active_count = len(self.result_queues)
             if active_count > 0:
-                logger.debug(f"👁️ Мониторинг: проверка {active_count} активных лобби...")
+                logger.info(f"👁️ Мониторинг: проверка {active_count} активных лобби...")
             
             for username, queue in list(self.result_queues.items()):
                 try:
