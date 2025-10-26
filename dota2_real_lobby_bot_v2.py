@@ -240,13 +240,19 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
             except Exception as e:
                 local_logger.warning(f"[{username}] Ошибка применения настроек: {e}")
             
-            # ВАЖНО: Заходим в канал трансляции (слот 1)
+            # ВАЖНО: Заходим в слот наблюдателя (team=4) чтобы загрузиться в игру
             try:
+                # Сначала занимаем канал трансляции
                 dota.join_practice_lobby_broadcast_channel(channel=1)
                 local_logger.info(f"[{username}] Занят слот в канале трансляции")
                 gevent.sleep(1)
+                
+                # Затем присоединяемся к слоту наблюдателя чтобы загрузиться в игру
+                dota.join_practice_lobby_team(team=4)
+                local_logger.info(f"[{username}] ✅ Присоединились к слоту наблюдателя (team=4)")
+                gevent.sleep(1)
             except Exception as e:
-                local_logger.warning(f"[{username}] Ошибка входа в канал: {e}")
+                local_logger.warning(f"[{username}] Ошибка входа: {e}")
             
             local_logger.info(f"[{username}] ✅ Лобби полностью настроено!")
             result_queue.put({
@@ -346,16 +352,16 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                     else:
                         local_logger.info(f"[{username}] ✅✅✅ 10 ИГРОКОВ ГОТОВЫ (5 vs 5)! ЗАПУСКАЕМ ИГРУ...")
                     
+                    # Проверяем, что бот в канале трансляции
+                    local_logger.info(f"[{username}] 📡 Проверяем статус в канале трансляции...")
+                    local_logger.info(f"[{username}] 📡 dota.lobby.state = {dota.lobby.state if hasattr(dota.lobby, 'state') else 'N/A'}")
+                    
                     gevent.sleep(2)
+                    local_logger.info(f"[{username}] 🚀 ЗАПУСКАЕМ ИГРУ...")
                     dota.launch_practice_lobby()
-                    gevent.sleep(2)
+                    gevent.sleep(5)  # Даём время на запуск
                     
-                    # КРИТИЧНО: Устанавливаем готовность бота к загрузке в игру
-                    local_logger.info(f"[{username}] 🎮 Подтверждаем готовность бота загрузиться в игру...")
-                    dota.ready = True  # Устанавливаем свойство готовности
-                    gevent.sleep(2)
-                    
-                    local_logger.info(f"[{username}] 🎮🎮🎮 ИГРА ЗАПУЩЕНА! Бот готов загрузиться как наблюдатель!")
+                    local_logger.info(f"[{username}] 🎮🎮🎮 ИГРА ЗАПУЩЕНА! Бот загружается как наблюдатель!")
                     game_started = True
                     break
                 else:
@@ -1386,7 +1392,7 @@ class RealDota2BotV2:
         try:
             # Генерируем данные
             if not lobby_name:
-                lobby_name = self.get_next_lobby_name()
+            lobby_name = self.get_next_lobby_name()
             if not game_mode:
                 game_mode = self.game_mode
             if not series_type:
@@ -1438,12 +1444,12 @@ class RealDota2BotV2:
             result = None
             
             while time.time() - start_time < max_wait_time:
-                await asyncio.sleep(2)
+            await asyncio.sleep(2)
             
                 # Обновляем статус каждые 10 секунд
                 elapsed = int(time.time() - start_time)
                 if elapsed % 10 == 0:
-                    await status_msg.edit_text(
+            await status_msg.edit_text(
                         f"⏳ <b>Создание реального лобби</b>\n\n"
                         f"🤖 Аккаунт: {account.username}\n"
                         f"🏷️ Название: {lobby_name}\n"
@@ -1463,21 +1469,21 @@ class RealDota2BotV2:
                 logger.info(f"✅ РЕАЛЬНОЕ лобби создано: {lobby_name}")
                 
                 # Создаем объект лобби
-                lobby_info = LobbyInfo(
-                    lobby_name=lobby_name,
-                    password=password,
-                    account=account.username,
-                )
-                
-                # Сохраняем
-                self.active_lobbies[lobby_name] = lobby_info
-                account.is_busy = True
-                account.current_lobby = lobby_name
-                
+            lobby_info = LobbyInfo(
+                lobby_name=lobby_name,
+                password=password,
+                account=account.username,
+            )
+            
+            # Сохраняем
+            self.active_lobbies[lobby_name] = lobby_info
+            account.is_busy = True
+            account.current_lobby = lobby_name
+            
                 # Сохраняем процесс
                 self.active_processes[account.username] = process
                 
-                return lobby_info
+            return lobby_info
             else:
                 error_msg = result.get('error', 'Unknown error') if result else 'Timeout'
                 logger.error(f"❌ Не удалось создать лобби: {error_msg}")
@@ -1629,9 +1635,9 @@ class RealDota2BotV2:
             # Закрываем бота (если есть старый)
             if lobby.account in self.active_bots:
                 try:
-                    bot = self.active_bots[lobby.account]
-                    bot.destroy_lobby()
-                    bot.disconnect()
+                bot = self.active_bots[lobby.account]
+                bot.destroy_lobby()
+                bot.disconnect()
                 except:
                     pass
                 del self.active_bots[lobby.account]
