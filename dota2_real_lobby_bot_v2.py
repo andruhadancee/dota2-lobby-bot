@@ -2470,16 +2470,33 @@ class RealDota2BotV2:
                 match['status'] = 'active'
                 self.save_schedule()
                 
-                # Отправляем уведомление
+                # Отправляем уведомление в личку администратору
+                for admin_id in self.admin_ids:
+                    admin_message = f"✅ <b>Лобби создано по расписанию!</b>\n\n"
+                    admin_message += f"<b>{lobby_name}</b>\n"
+                    admin_message += f"🔒 Пароль: <code>{lobby_info.password}</code>\n"
+                    admin_message += f"🎮 Режим: {game_mode}\n"
+                    admin_message += f"🎯 Серия: {series_type.upper()}"
+                    
+                    try:
+                        await self.telegram_app.bot.send_message(
+                            chat_id=admin_id,
+                            text=admin_message,
+                            parse_mode='HTML'
+                        )
+                    except Exception as e:
+                        logger.error(f"Не удалось отправить уведомление админу {admin_id}: {e}")
+                
+                # Отправляем уведомление в группу
                 if self.notification_chat_id:
-                    message = f"<b>{lobby_name}</b>\n\n"
-                    message += f"🔒 Пароль: <code>{lobby_info.password}</code>\n"
-                    message += f"🎮 Режим: {game_mode}\n"
-                    message += f"🎯 Серия: {series_type.upper()}"
+                    group_message = f"<b>{lobby_name}</b>\n\n"
+                    group_message += f"<b>🔒 Пароль: </b><code>{lobby_info.password}</code>\n"
+                    group_message += f"<b>🎮 Режим: {game_mode}</b>\n"
+                    group_message += f"<b>🎯 Серия: {series_type.upper()}</b>"
                     
                     send_kwargs = {
                         'chat_id': self.notification_chat_id,
-                        'text': message,
+                        'text': group_message,
                         'parse_mode': 'HTML'
                     }
                     
