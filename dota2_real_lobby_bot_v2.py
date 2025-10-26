@@ -424,6 +424,25 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
             except Exception as disconnect_error:
                 local_logger.warning(f"[{username}] Ошибка при отключении после игры: {disconnect_error}")
         
+    except KeyboardInterrupt:
+        local_logger.info(f"[{username}] 🛑 Получен сигнал прерывания (Ctrl+C)!")
+        # КРИТИЧНО: Удаляем лобби перед выходом!
+        try:
+            local_logger.info(f"[{username}] 🗑️ Удаляем лобби перед выходом...")
+            dota.leave_practice_lobby()
+            gevent.sleep(1)
+            dota.destroy_lobby()
+            gevent.sleep(2)
+            local_logger.info(f"[{username}] ✅ Лобби удалено!")
+        except Exception as cleanup_error:
+            local_logger.error(f"[{username}] ❌ Ошибка при удалении лобби: {cleanup_error}")
+        
+        try:
+            steam.disconnect()
+            local_logger.info(f"[{username}] 👋 Отключились от Steam")
+        except:
+            pass
+            
     except Exception as e:
         local_logger.error(f"[{username}] Ошибка: {e}", exc_info=True)
         result_queue.put({'success': False, 'error': str(e)})
@@ -2444,14 +2463,17 @@ class RealDota2BotV2:
             logger.info(f"Отправка shutdown signal для {username}...")
             event.set()
         
-        # Ждем завершения всех процессов (максимум 15 секунд на каждый)
+        # Ждем завершения всех процессов (даём время на cleanup)
+        import time
+        time.sleep(1)  # Даём время процессам получить сигнал
+        
         for username, process in list(self.active_processes.items()):
             if process.is_alive():
                 logger.info(f"Ожидание завершения процесса {username}...")
-                process.join(timeout=15)
+                process.join(timeout=20)  # Увеличено до 20 секунд
                 
                 if process.is_alive():
-                    logger.warning(f"Процесс {username} не завершился, принудительное завершение...")
+                    logger.warning(f"⚠️ Процесс {username} не завершился, принудительное завершение...")
                     process.terminate()
                     process.join(timeout=5)
         
