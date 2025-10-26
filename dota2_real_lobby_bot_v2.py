@@ -90,6 +90,7 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
         
         lobby_created = threading.Event()
         lobby_data_container = {'data': None}
+        old_lobby_id = None  # Сохраняем ID старого лобби для проверки
         
         def on_dota_ready():
             local_logger.info(f"[{username}] Dota 2 готов")
@@ -97,6 +98,17 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
             local_logger.info(f"[{username}] Доступные события dota: {dir(dota)}")
         
         def on_lobby_created(lobby):
+            # КРИТИЧЕСКИ ВАЖНО: Проверяем что это НОВОЕ лобби, а не кеш!
+            try:
+                new_lobby_id = getattr(lobby, 'lobby_id', None)
+                if new_lobby_id and new_lobby_id == old_lobby_id:
+                    local_logger.warning(f"[{username}] ⚠️ EVENT_LOBBY_NEW но ID старый ({new_lobby_id})! Игнорируем...")
+                    return  # НЕ устанавливаем event!
+                else:
+                    local_logger.info(f"[{username}] ✅ НОВОЕ лобби создано! ID={new_lobby_id} (старое: {old_lobby_id})")
+            except Exception as e:
+                local_logger.warning(f"[{username}] Не удалось проверить ID: {e}")
+            
             local_logger.info(f"[{username}] Лобби создано!")
             lobby_data_container['data'] = lobby
             lobby_created.set()
@@ -159,6 +171,16 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
         
         # Ждем подключения к координатору (макс 60 сек)
         gevent.sleep(10)  # Даем время на подключение
+        
+        # КРИТИЧЕСКИ ВАЖНО: Сохраняем ID старого лобби (если есть)
+        nonlocal old_lobby_id
+        try:
+            if hasattr(dota, 'lobby') and dota.lobby is not None:
+                old_lobby_id = getattr(dota.lobby, 'lobby_id', None)
+                if old_lobby_id:
+                    local_logger.info(f"[{username}] ⚠️ Обнаружен кеш старого лобби ID={old_lobby_id}")
+        except:
+            pass
         
         # ВАЖНО: Очищаем любой кеш лобби (при подключении может быть мусор)
         local_logger.info(f"[{username}] Очистка кеша лобби...")
