@@ -214,7 +214,6 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
             'dota_tv_delay': 2,
             'fill_with_bots': False,
             'cm_pick': 1,  # Captains Mode: подброс монетки для выбора стороны (право первого выбора)
-            'selection_priority_choice': 1,  # Порядок выбора: 1 = подброс монетки (coin toss)
             'radiant_series_wins': 0,
             'dire_series_wins': 0,
             'leagueid': 18390,  # ID турнира для отображения в настройках лобби
