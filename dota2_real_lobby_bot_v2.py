@@ -666,8 +666,6 @@ class RealDota2BotV2:
 📝 Базовое название: {self.lobby_base_name}
 🌍 Сервер: {self.server_region}
 🎮 Режим: {self.game_mode}
-
-<b>🔗 Режим: РЕАЛЬНОЕ создание лобби</b>
         """
     
     # ==================== КОМАНДЫ ====================
@@ -1255,7 +1253,7 @@ class RealDota2BotV2:
     async def create_single_real_lobby(self, account: SteamAccount, status_msg, 
                                        game_mode: str = None, series_type: str = None, 
                                        lobby_name: str = None) -> Optional[LobbyInfo]:
-        """РЕАЛЬНОЕ создание лобби через Steam и Dota 2 в отдельном процессе"""
+        """Создание лобби через Steam и Dota 2 в отдельном процессе"""
         process = None
         result_queue = None
         shutdown_event = None
@@ -1337,7 +1335,7 @@ class RealDota2BotV2:
             
             # Анализируем результат
             if result and result.get('success'):
-                logger.info(f"✅ РЕАЛЬНОЕ лобби создано: {lobby_name}")
+                logger.info(f"✅ Лобби создано: {lobby_name}")
                 
                 # Создаем объект лобби
                 lobby_info = LobbyInfo(
@@ -1506,16 +1504,6 @@ class RealDota2BotV2:
                     if lobby.account in self.result_queues:
                         del self.result_queues[lobby.account]
             
-            # Закрываем бота (если есть старый)
-            if lobby.account in self.active_bots:
-                try:
-                    bot = self.active_bots[lobby.account]
-                    bot.destroy_lobby()
-                    bot.disconnect()
-                except:
-                    pass
-                del self.active_bots[lobby.account]
-            
             # Освобождаем аккаунт
             for account in self.steam_accounts:
                 if account.username == lobby.account:
@@ -1593,16 +1581,8 @@ class RealDota2BotV2:
                             del self.active_processes[lobby.account]
                         if lobby.account in self.shutdown_events:
                             del self.shutdown_events[lobby.account]
-                
-                # Закрываем бота (если есть)
-                if lobby.account in self.active_bots:
-                    try:
-                        bot = self.active_bots[lobby.account]
-                        bot.destroy_lobby()
-                        bot.disconnect()
-                    except:
-                        pass
-                    del self.active_bots[lobby.account]
+                        if lobby.account in self.result_queues:
+                            del self.result_queues[lobby.account]
                 
                 # Освобождаем аккаунт
                 for account in self.steam_accounts:
@@ -2108,8 +2088,6 @@ class RealDota2BotV2:
    🔴 Занятых: {total - available}
 
 🎯 Лобби: {len(self.active_lobbies)}
-
-⚙️ Режим: 🔗 РЕАЛЬНОЕ создание
         """
         try:
             await query.edit_message_text(
@@ -2498,7 +2476,6 @@ class RealDota2BotV2:
         
         logger.info(f"Аккаунтов: {len(self.steam_accounts)}")
         logger.info("✅ Бот запущен!")
-        logger.info("🔗 Режим: РЕАЛЬНОЕ создание лобби v2")
         logger.info("=" * 50)
         
         try:
