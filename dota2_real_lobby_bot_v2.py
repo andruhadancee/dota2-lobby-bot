@@ -470,169 +470,11 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
         result_queue.put({'success': False, 'error': str(e)})
 
 
-class DotaBot:
-    """Класс для управления одним Steam аккаунтом"""
-    
-    def __init__(self, username: str, password: str):
-        self.username = username
-        self.password = password
-        self.is_logged_in = False
-        self.current_lobby = None
-        
-        # Steam клиент
-        self.steam = SteamClient()
-        self.dota = Dota2Client(self.steam)
-        
-        # События
-        self.steam.on('logged_on', self._handle_logged_on)
-        self.steam.on('disconnected', self._handle_disconnected)
-        self.dota.on('ready', self._handle_dota_ready)
-        self.dota.on(self.dota.EVENT_LOBBY_NEW, self._handle_lobby_created)
-        self.dota.on(self.dota.EVENT_LOBBY_CHANGED, self._handle_lobby_changed)
-        
-        self.ready_event = threading.Event()
-        self.lobby_created_event = threading.Event()
-        self.lobby_data = None
-        
-    def _handle_logged_on(self):
-        logger.info(f"[{self.username}] ✅ Вход в Steam выполнен")
-        self.is_logged_in = True
-        
-    def _handle_disconnected(self):
-        logger.warning(f"[{self.username}] ⚠️ Отключен от Steam")
-        self.is_logged_in = False
-        
-    def _handle_dota_ready(self):
-        logger.info(f"[{self.username}] ✅ Dota 2 клиент готов")
-        self.ready_event.set()
-        
-    def _handle_lobby_created(self, lobby):
-        logger.info(f"[{self.username}] ✅ Лобби создано!")
-        self.lobby_data = lobby
-        self.current_lobby = lobby
-        self.lobby_created_event.set()
-        
-    def _handle_lobby_changed(self, lobby):
-        self.lobby_data = lobby
-        self.current_lobby = lobby
-        
-    def login(self) -> bool:
-        try:
-            logger.info(f"[{self.username}] 🔄 Подключение к Steam...")
-            result = self.steam.login(username=self.username, password=self.password)
-            
-            if result == EResult.OK:
-                logger.info(f"[{self.username}] ✅ Успешный вход в Steam")
-                return True
-            else:
-                logger.error(f"[{self.username}] ❌ Ошибка входа: {result}")
-                return False
-        except Exception as e:
-            logger.error(f"[{self.username}] ❌ Исключение при входе: {e}", exc_info=True)
-            return False
-    
-    def launch_dota(self) -> bool:
-        try:
-            logger.info(f"[{self.username}] 🎮 Запуск Dota 2 (подключение к координатору)...")
-            self.dota.launch()
-            
-            # Увеличенный таймаут для Pterodactyl (2 минуты)
-            if self.ready_event.wait(timeout=120):
-                logger.info(f"[{self.username}] ✅ Dota 2 координатор подключен")
-                return True
-            else:
-                logger.error(f"[{self.username}] ❌ Таймаут подключения к Dota 2 (120 секунд)")
-                return False
-        except Exception as e:
-            logger.error(f"[{self.username}] ❌ Ошибка подключения к Dota 2: {e}", exc_info=True)
-            return False
-    
-    def create_lobby(self, lobby_name: str, password: str, server: str, mode: str) -> Optional[dict]:
-        try:
-            logger.info(f"[{self.username}] 🎮 Создание лобби: {lobby_name}")
-            
-            server_region = self._get_server_region(server)
-            game_mode = self._get_game_mode(mode)
-            
-            options = {
-                'game_name': lobby_name,
-                'pass_key': password,
-                'server_region': server_region,
-                'game_mode': game_mode,
-                'allow_spectating': False,
-                'allow_cheats': False,
-                'dota_tv_delay': 2,
-            }
-            
-            self.dota.create_practice_lobby(password=password, options=options)
-            
-            if self.lobby_created_event.wait(timeout=30):
-                logger.info(f"[{self.username}] ✅ Лобби создано успешно")
-                
-                lobby_info = {
-                    'lobby_name': lobby_name,
-                    'password': password,
-                    'account': self.username,
-                    'server': server,
-                    'mode': mode
-                }
-                return lobby_info
-            else:
-                logger.error(f"[{self.username}] ❌ Таймаут создания лобби")
-                return None
-        except Exception as e:
-            logger.error(f"[{self.username}] ❌ Ошибка создания лобби: {e}", exc_info=True)
-            return None
-    
-    def _get_server_region(self, server: str) -> EServerRegion:
-        mapping = {
-            'Stockholm': EServerRegion.Europe,
-            'Europe West': EServerRegion.Europe,
-            'Russia': EServerRegion.Europe,
-            'US East': EServerRegion.USEast,
-            'US West': EServerRegion.USWest,
-        }
-        return mapping.get(server, EServerRegion.Europe)
-    
-    def _get_game_mode(self, mode: str) -> DOTA_GameMode:
-        mapping = {
-            'Captains Mode': DOTA_GameMode.DOTA_GAMEMODE_CM,
-            'All Pick': DOTA_GameMode.DOTA_GAMEMODE_AP,
-            'Random Draft': DOTA_GameMode.DOTA_GAMEMODE_RD,
-            'Single Draft': DOTA_GameMode.DOTA_GAMEMODE_SD,
-        }
-        return mapping.get(mode, DOTA_GameMode.DOTA_GAMEMODE_CM)
-    
-    def destroy_lobby(self):
-        try:
-            if self.current_lobby:
-                logger.info(f"[{self.username}] 🗑️ Закрытие лобби")
-                self.dota.destroy_lobby()
-                self.current_lobby = None
-        except Exception as e:
-            logger.error(f"[{self.username}] ❌ Ошибка закрытия лобби: {e}")
-    
-    def disconnect(self):
-        try:
-            logger.info(f"[{self.username}] 👋 Отключение")
-            if self.dota:
-                self.dota.exit()
-            if self.steam.logged_on:
-                self.steam.logout()
-        except Exception as e:
-            logger.error(f"[{self.username}] ❌ Ошибка отключения: {e}")
-    
-    def run_client(self):
-        self.steam.run_forever()
-
-
 class SteamAccount:
     """Информация об аккаунте"""
     def __init__(self, username: str, password: str):
         self.username = username
         self.password = password
-        self.bot_instance: Optional[DotaBot] = None
-        self.current_lobby = None
         self.is_busy = False
         
     def to_dict(self):
@@ -667,7 +509,6 @@ class RealDota2BotV2:
         # Хранилище
         self.steam_accounts: List[SteamAccount] = []
         self.active_lobbies: Dict[str, LobbyInfo] = {}  # "wb cup 1" -> LobbyInfo
-        self.active_bots: Dict[str, DotaBot] = {}
         self.active_processes: Dict[str, Process] = {}  # username -> Process
         self.shutdown_events: Dict[str, multiprocessing.Event] = {}  # username -> Event
         self.result_queues: Dict[str, Queue] = {}  # username -> Queue для мониторинга закрытия лобби
