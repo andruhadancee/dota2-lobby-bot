@@ -348,8 +348,15 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                     
                     gevent.sleep(2)
                     dota.launch_practice_lobby()
-                    gevent.sleep(3)
-                    local_logger.info(f"[{username}] 🎮🎮🎮 ИГРА ЗАПУЩЕНА!")
+                    gevent.sleep(2)
+                    local_logger.info(f"[{username}] 🎮 ИГРА ЗАПУЩЕНА! Подтверждаем готовность бота...")
+                    
+                    # КРИТИЧНО: Подтверждаем готовность бота как наблюдателя
+                    dota.ready()
+                    local_logger.info(f"[{username}] ✅ Бот готов к загрузке в игру!")
+                    gevent.sleep(2)
+                    
+                    local_logger.info(f"[{username}] 🎮🎮🎮 БОТ ЗАГРУЖАЕТСЯ В ИГРУ КАК НАБЛЮДАТЕЛЬ!")
                     game_started = True
                     break
                 else:
