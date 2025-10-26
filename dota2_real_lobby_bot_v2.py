@@ -237,9 +237,30 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
             try:
                 dota.config_practice_lobby(options=options)
                 local_logger.info(f"[{username}] Настройки применены")
-                gevent.sleep(1)  # Уменьшено с 2 до 1 секунды
+                gevent.sleep(1)
             except Exception as e:
                 local_logger.warning(f"[{username}] Ошибка применения настроек: {e}")
+            
+            # Применяем подброс монетки для порядка выбора (работает для всех режимов)
+            try:
+                coin_toss_options = {
+                    'selection_priority': 1  # 1 = подброс монетки (coin toss)
+                }
+                dota.config_practice_lobby(options=coin_toss_options)
+                local_logger.info(f"[{username}] ✅ Подброс монетки включен")
+                gevent.sleep(1)
+            except Exception as e:
+                local_logger.debug(f"[{username}] Подброс монетки (попытка 1): {e}")
+                # Пробуем альтернативный параметр
+                try:
+                    alt_options = {
+                        'cm_pick': 1  # Альтернативный параметр для подброса монетки
+                    }
+                    dota.config_practice_lobby(options=alt_options)
+                    local_logger.info(f"[{username}] ✅ Подброс монетки включен (альтернативный метод)")
+                    gevent.sleep(1)
+                except Exception as e2:
+                    local_logger.warning(f"[{username}] Не удалось включить подброс монетки: {e2}")
             
             # ВАЖНО: Заходим в слот наблюдателя (team=4) чтобы загрузиться в игру
             try:
@@ -1511,14 +1532,14 @@ class RealDota2BotV2:
                     account=account.username,
                 )
                 
-                # ВАЖНО: Сразу сохраняем процесс и очередь для мониторинга (до обновления статуса)
-                self.active_processes[account.username] = process
-                self.result_queues[account.username] = result_queue
-                
-                # Теперь обновляем статус
+                # Сохраняем статус
                 self.active_lobbies[lobby_name] = lobby_info
                 account.is_busy = True
                 account.current_lobby = lobby_name
+                
+                # ВАЖНО: Сразу после обновления статуса сохраняем процесс и очередь для мониторинга
+                self.active_processes[account.username] = process
+                self.result_queues[account.username] = result_queue
                 
                 return lobby_info
             else:
