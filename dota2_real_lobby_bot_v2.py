@@ -389,16 +389,26 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
             except Exception as disconnect_error:
                 local_logger.warning(f"[{username}] Ошибка при отключении: {disconnect_error}")
         else:
-            # Игра запущена - остаемся подключенными до получения команды shutdown
+            # Игра запущена - остаемся подключенными до получения команды shutdown или закрытия лобби
             local_logger.info(f"[{username}] 🎮 Игра запущена! Бот остается в Steam для поддержки лобби...")
             local_logger.info(f"[{username}] ⏳ Ожидание завершения игры или команды закрытия...")
             
             # Держим процесс живым пока идет игра или не получен сигнал shutdown
             while not shutdown_event.is_set():
                 gevent.sleep(5)  # Проверяем каждые 5 секунд
+                
+                # Проверяем, существует ли ещё лобби (игра может закончиться)
+                try:
+                    if not dota.lobby or not hasattr(dota, 'lobby'):
+                        local_logger.info(f"[{username}] 🏁 Лобби закрылось (игра завершена)!")
+                        # Отправляем сообщение о закрытии лобби
+                        result_queue.put({'success': False, 'lobby_closed': True})
+                        break
+                except:
+                    pass
             
-            # Получена команда закрытия
-            local_logger.info(f"[{username}] 🛑 Получена команда закрытия после игры")
+            # Получена команда закрытия или игра завершена
+            local_logger.info(f"[{username}] 🛑 Завершение работы...")
             try:
                 dota.destroy_lobby()
                 gevent.sleep(3)
@@ -619,6 +629,7 @@ class RealDota2BotV2:
         self.active_bots: Dict[str, DotaBot] = {}
         self.active_processes: Dict[str, Process] = {}  # username -> Process
         self.shutdown_events: Dict[str, multiprocessing.Event] = {}  # username -> Event
+        self.result_queues: Dict[str, Queue] = {}  # username -> Queue для мониторинга закрытия лобби
         
         # Настройки
         self.lobby_base_name = "wb cup"  # Базовое название
@@ -1480,8 +1491,9 @@ class RealDota2BotV2:
                 account.is_busy = True
                 account.current_lobby = lobby_name
                 
-                # Сохраняем процесс
+                # Сохраняем процесс и очередь для мониторинга
                 self.active_processes[account.username] = process
+                self.result_queues[account.username] = result_queue
                 
                 return lobby_info
             else:
@@ -1631,6 +1643,8 @@ class RealDota2BotV2:
                         del self.active_processes[lobby.account]
                     if lobby.account in self.shutdown_events:
                         del self.shutdown_events[lobby.account]
+                    if lobby.account in self.result_queues:
+                        del self.result_queues[lobby.account]
             
             # Закрываем бота (если есть старый)
             if lobby.account in self.active_bots:
@@ -2307,8 +2321,18 @@ class RealDota2BotV2:
             except Exception as e:
                 logger.error(f"Ошибка добавления задачи для матча {match.get('id')}: {e}")
         
+        # Добавляем задачу мониторинга активных лобби (выполняется каждые 10 секунд)
+        self.scheduler.add_job(
+            self.monitor_active_lobbies,
+            'interval',
+            seconds=10,
+            id='monitor_lobbies',
+            replace_existing=True
+        )
+        logger.info("👁️ Добавлена задача мониторинга активных лобби (каждые 10 сек)")
+        
         # Запускаем планировщик если есть задачи (только если event loop уже запущен)
-        if active_matches:
+        if active_matches or True:  # Запускаем всегда для мониторинга
             if not self.scheduler.running:
                 try:
                     self.scheduler.start()
@@ -2423,6 +2447,47 @@ class RealDota2BotV2:
         
         except Exception as e:
             logger.error(f"Ошибка выполнения запланированного матча: {e}", exc_info=True)
+    
+    async def monitor_active_lobbies(self):
+        """Периодически проверяет активные лобби на предмет завершения игры"""
+        try:
+            for username, queue in list(self.result_queues.items()):
+                try:
+                    # Проверяем очередь без блокировки
+                    if not queue.empty():
+                        result = queue.get_nowait()
+                        
+                        # Если получили сообщение о закрытии лобби
+                        if result.get('lobby_closed'):
+                            logger.info(f"🏁 Лобби для {username} закрылось (игра завершена)")
+                            
+                            # Находим аккаунт и лобби
+                            for account in self.steam_accounts:
+                                if account.username == username:
+                                    lobby_name = account.current_lobby
+                                    
+                                    # Освобождаем аккаунт
+                                    account.is_busy = False
+                                    account.current_lobby = None
+                                    
+                                    # Удаляем лобби из активных
+                                    if lobby_name and lobby_name in self.active_lobbies:
+                                        del self.active_lobbies[lobby_name]
+                                        logger.info(f"✅ Лобби {lobby_name} удалено из активных")
+                                    
+                                    # Очищаем процесс
+                                    if username in self.active_processes:
+                                        del self.active_processes[username]
+                                    if username in self.shutdown_events:
+                                        del self.shutdown_events[username]
+                                    if username in self.result_queues:
+                                        del self.result_queues[username]
+                                    
+                                    break
+                except Exception as queue_error:
+                    pass  # Игнорируем ошибки отдельных очередей
+        except Exception as e:
+            logger.error(f"Ошибка мониторинга лобби: {e}")
     
     # ==================== SETUP ====================
     
