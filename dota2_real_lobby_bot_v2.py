@@ -1380,7 +1380,7 @@ class RealDota2BotV2:
         try:
             # Генерируем данные
             if not lobby_name:
-            lobby_name = self.get_next_lobby_name()
+                lobby_name = self.get_next_lobby_name()
             if not game_mode:
                 game_mode = self.game_mode
             if not series_type:
@@ -1432,12 +1432,12 @@ class RealDota2BotV2:
             result = None
             
             while time.time() - start_time < max_wait_time:
-            await asyncio.sleep(2)
+                await asyncio.sleep(2)
             
                 # Обновляем статус каждые 10 секунд
                 elapsed = int(time.time() - start_time)
                 if elapsed % 10 == 0:
-            await status_msg.edit_text(
+                    await status_msg.edit_text(
                         f"⏳ <b>Создание реального лобби</b>\n\n"
                         f"🤖 Аккаунт: {account.username}\n"
                         f"🏷️ Название: {lobby_name}\n"
@@ -1457,21 +1457,21 @@ class RealDota2BotV2:
                 logger.info(f"✅ РЕАЛЬНОЕ лобби создано: {lobby_name}")
                 
                 # Создаем объект лобби
-            lobby_info = LobbyInfo(
-                lobby_name=lobby_name,
-                password=password,
-                account=account.username,
-            )
-            
-            # Сохраняем
-            self.active_lobbies[lobby_name] = lobby_info
-            account.is_busy = True
-            account.current_lobby = lobby_name
-            
+                lobby_info = LobbyInfo(
+                    lobby_name=lobby_name,
+                    password=password,
+                    account=account.username,
+                )
+                
+                # Сохраняем
+                self.active_lobbies[lobby_name] = lobby_info
+                account.is_busy = True
+                account.current_lobby = lobby_name
+                
                 # Сохраняем процесс
                 self.active_processes[account.username] = process
                 
-            return lobby_info
+                return lobby_info
             else:
                 error_msg = result.get('error', 'Unknown error') if result else 'Timeout'
                 logger.error(f"❌ Не удалось создать лобби: {error_msg}")
