@@ -181,20 +181,45 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
         except:
             pass
         
-        # ВАЖНО: Очищаем любой кеш лобби (при подключении может быть мусор)
-        local_logger.info(f"[{username}] Очистка кеша лобби...")
-        try:
-            dota.leave_practice_lobby()
-            gevent.sleep(1)
-        except:
-            pass
-        
-        try:
-            dota.destroy_lobby()
-            gevent.sleep(2)
-            local_logger.info(f"[{username}] ✅ Кеш очищен")
-        except:
-            local_logger.info(f"[{username}] ✅ Кеш был пустой")
+        # КРИТИЧНО: Для турнирных лобби нужно ПОЛНОСТЬЮ переподключиться к Dota!
+        if old_lobby_id:
+            local_logger.info(f"[{username}] ⚠️ Обнаружен кеш турнирного лобби! ПЕРЕПОДКЛЮЧАЕМСЯ к Dota...")
+            try:
+                dota.leave_practice_lobby()
+                gevent.sleep(1)
+                dota.destroy_lobby()
+                gevent.sleep(2)
+            except:
+                pass
+            
+            # ПОЛНОЕ переподключение к Dota 2
+            local_logger.info(f"[{username}] 🔄 Выход из Dota 2...")
+            try:
+                dota.exit()
+                gevent.sleep(3)
+            except:
+                pass
+            
+            local_logger.info(f"[{username}] 🔄 Повторный запуск Dota 2...")
+            dota.launch()
+            gevent.sleep(10)
+            local_logger.info(f"[{username}] ✅ Dota 2 перезапущен, кеш очищен!")
+            old_lobby_id = None  # Сбрасываем, т.к. после переподключения кеша нет
+        else:
+            # Если кеша не было - просто очищаем на всякий случай
+            local_logger.info(f"[{username}] Очистка кеша лобби...")
+            try:
+                dota.leave_practice_lobby()
+                gevent.sleep(1)
+            except:
+                pass
+            
+            try:
+                dota.destroy_lobby()
+                gevent.sleep(2)
+                local_logger.info(f"[{username}] ✅ Кеш очищен")
+            except:
+                local_logger.info(f"[{username}] ✅ Кеш был пустой")
         
         # 3. Создание лобби
         local_logger.info(f"[{username}] Создание лобби: {lobby_name}")
