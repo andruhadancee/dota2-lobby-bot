@@ -338,6 +338,18 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                     local_logger.warning(f"[{username}] ⚠️ dota.lobby = None! Пропускаем проверку.")
                     continue
                 
+                # КРИТИЧНО: Проверяем что лобби РЕАЛЬНО существует (не кешированный объект)
+                try:
+                    lobby_id = dota.lobby.lobby_id
+                    local_logger.info(f"[{username}] 🆔 Lobby ID: {lobby_id}")
+                except Exception as e:
+                    local_logger.error(f"[{username}] ❌ Лобби НЕ СУЩЕСТВУЕТ (ошибка доступа к lobby_id): {e}")
+                    if not game_started:
+                        result_queue.put({'success': False, 'lobby_closed': True})
+                        local_logger.info(f"[{username}] ⏳ Ожидание обработки сообщения о закрытии (15 секунд)...")
+                        gevent.sleep(15)
+                    break
+                
                 # Используем all_members вместо members
                 has_members = hasattr(dota.lobby, 'all_members')
                 local_logger.info(f"[{username}] 🔍 dota.lobby.all_members существует: {has_members}")
