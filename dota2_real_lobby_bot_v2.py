@@ -367,17 +367,40 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                 local_logger.info(f"[{username}] ✅ Лобби удалено")
             except Exception as destroy_error:
                 local_logger.warning(f"[{username}] Ошибка при удалении лобби: {destroy_error}")
+            
+            # Отключаемся от Steam
+            try:
+                dota.leave_practice_lobby()
+                gevent.sleep(1)
+                steam.disconnect()
+                local_logger.info(f"[{username}] Отключились от Steam")
+            except Exception as disconnect_error:
+                local_logger.warning(f"[{username}] Ошибка при отключении: {disconnect_error}")
         else:
-            local_logger.info(f"[{username}] Игра запущена, лобби не удаляем")
-        
-        # Отключаемся от Steam
-        try:
-            dota.leave_practice_lobby()
-            gevent.sleep(1)
-            steam.disconnect()
-            local_logger.info(f"[{username}] Отключились от Steam")
-        except Exception as disconnect_error:
-            local_logger.warning(f"[{username}] Ошибка при отключении: {disconnect_error}")
+            # Игра запущена - остаемся подключенными до получения команды shutdown
+            local_logger.info(f"[{username}] 🎮 Игра запущена! Бот остается в Steam для поддержки лобби...")
+            local_logger.info(f"[{username}] ⏳ Ожидание завершения игры или команды закрытия...")
+            
+            # Держим процесс живым пока идет игра или не получен сигнал shutdown
+            while not shutdown_event.is_set():
+                gevent.sleep(5)  # Проверяем каждые 5 секунд
+            
+            # Получена команда закрытия
+            local_logger.info(f"[{username}] 🛑 Получена команда закрытия после игры")
+            try:
+                dota.destroy_lobby()
+                gevent.sleep(3)
+                local_logger.info(f"[{username}] ✅ Лобби удалено после игры")
+            except Exception as destroy_error:
+                local_logger.warning(f"[{username}] Ошибка при удалении лобби после игры: {destroy_error}")
+            
+            try:
+                dota.leave_practice_lobby()
+                gevent.sleep(1)
+                steam.disconnect()
+                local_logger.info(f"[{username}] Отключились от Steam после игры")
+            except Exception as disconnect_error:
+                local_logger.warning(f"[{username}] Ошибка при отключении после игры: {disconnect_error}")
         
     except Exception as e:
         local_logger.error(f"[{username}] Ошибка: {e}", exc_info=True)
