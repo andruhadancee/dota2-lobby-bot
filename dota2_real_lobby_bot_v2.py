@@ -252,6 +252,21 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                 local_logger.warning(f"[{username}] Ошибка входа: {e}")
             
             local_logger.info(f"[{username}] ✅ Лобби полностью настроено!")
+            
+            # ВАЖНО: Ждём, пока лобби станет готовым и видимым в поиске
+            # state = 0 означает LOBBY_STATE_READY (готово)
+            # state = 2 означает LOBBY_STATE_LOADING (загрузка)
+            local_logger.info(f"[{username}] ⏳ Ожидание готовности лобби для отображения в поиске...")
+            for wait_attempt in range(10):  # Ждём до 10 секунд
+                if hasattr(dota, 'lobby') and dota.lobby:
+                    lobby_state = dota.lobby.state if hasattr(dota.lobby, 'state') else None
+                    if lobby_state == 0:  # LOBBY_STATE_READY
+                        local_logger.info(f"[{username}] ✅ Лобби готово (state = 0), видимо в поиске!")
+                        break
+                    else:
+                        local_logger.info(f"[{username}] ⏳ Лобби ещё не готово (state = {lobby_state}), ждём...")
+                gevent.sleep(1)
+            
             result_queue.put({
                 'success': True,
                 'lobby_name': lobby_name,
@@ -545,6 +560,21 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                                 local_logger.info(f"[{username}] 📡 Проверка лобби после применения настроек: state = {dota.lobby.state if hasattr(dota.lobby, 'state') else 'N/A'}")
                         except Exception as cm_error:
                             local_logger.warning(f"[{username}] ⚠️ Ошибка применения cm_pick: {cm_error}")
+                        
+                        # ВАЖНО: Проверяем, что лобби готово (state = 0) перед запуском draft
+                        # чтобы убедиться, что оно видимо в поиске
+                        if hasattr(dota, 'lobby') and dota.lobby:
+                            lobby_state = dota.lobby.state if hasattr(dota.lobby, 'state') else None
+                            if lobby_state != 0:  # Не READY
+                                local_logger.warning(f"[{username}] ⚠️ Лобби не готово (state = {lobby_state}), ждём...")
+                                # Ждём, пока лобби станет готовым
+                                for wait_attempt in range(5):  # Ждём до 5 секунд
+                                    gevent.sleep(1)
+                                    if hasattr(dota, 'lobby') and dota.lobby:
+                                        lobby_state = dota.lobby.state if hasattr(dota.lobby, 'state') else None
+                                        if lobby_state == 0:  # LOBBY_STATE_READY
+                                            local_logger.info(f"[{username}] ✅ Лобби готово (state = 0), запускаем draft!")
+                                            break
                         
                         # Запускаем выбор сторон/героев (draft фазу)
                         # Для режимов с выбором launch_practice_lobby() запускает draft, а не игру
