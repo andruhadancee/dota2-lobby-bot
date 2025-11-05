@@ -481,10 +481,10 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
 
                     gevent.sleep(2)
                     
-                    # Режимы с выбором сторон/героев:
-                    # - CM/CD: нужен cm_pick: 1 для подброса монетки
-                    # - 1v1 Solo Mid и Mid Only: выбор сторон/героев происходит автоматически, но нужно запустить draft
-                    modes_with_draft = ['Captains Mode', 'Captains Draft', '1v1 Solo Mid', 'Mid Only']
+                    # Режимы с выбором сторон/героев (только CM/CD):
+                    # Для 1v1 Solo Mid и Mid Only выбор сторон/героев происходит автоматически внутри игры,
+                    # не нужно запускать draft отдельно - просто запускаем игру
+                    modes_with_draft = ['Captains Mode', 'Captains Draft']
                     needs_draft = mode in modes_with_draft
                     
                     if needs_draft:
