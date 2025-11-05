@@ -408,7 +408,25 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                                     r_tid = getattr(r_obj, 'team_id', None) or getattr(r_obj, 'id', None)
                                     d_tid = getattr(d_obj, 'team_id', None) or getattr(d_obj, 'id', None)
                                     candidates.append((r_tid, d_tid))
-                                # 3) По членам лобби (team/tag/id)
+                                # 3) team_details (официальное место хранения команд в лобби)
+                                try:
+                                    details = getattr(lobby_obj, 'team_details', None)
+                                    radiant_ok, dire_ok = False, False
+                                    if details:
+                                        for td in list(details):
+                                            t_side = getattr(td, 'team', None)
+                                            t_id = getattr(td, 'team_id', 0) or getattr(td, 'id', 0)
+                                            t_tag = getattr(td, 'team_tag', '') or getattr(td, 'tag', '')
+                                            if t_side == 0 and (t_id or t_tag):
+                                                radiant_ok = True
+                                            if t_side == 1 and (t_id or t_tag):
+                                                dire_ok = True
+                                        if radiant_ok and dire_ok:
+                                            return True
+                                except Exception:
+                                    pass
+
+                                # 4) По членам лобби (team/tag/id)
                                 has_r, has_d = False, False
                                 for mem in getattr(lobby_obj, 'all_members', []) or []:
                                     t = getattr(mem, 'team', None)
@@ -429,7 +447,7 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                                 for r_tid, d_tid in candidates:
                                     if (isinstance(r_tid, int) and r_tid > 0) and (isinstance(d_tid, int) and d_tid > 0):
                                         return True
-                                # Если не смогли определить — выводим диагностический лог один раз в 5 сек
+                                # Если не смогли определить — выводим диагностический лог
                                 try:
                                     local_logger.info(
                                         f"[{username}] 🔍 Нет явных team_id. Атрибуты lobby с 'team': "
@@ -441,6 +459,16 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                                                 local_logger.info(f"    lobby.{name} = {val}")
                                             else:
                                                 local_logger.info(f"    lobby.{name} = {type(val).__name__}")
+                                    # Вывести team_details содержимое
+                                    details = getattr(lobby_obj, 'team_details', None)
+                                    if details:
+                                        for idx, td in enumerate(list(details)):
+                                            try:
+                                                local_logger.info(
+                                                    f"    team_details[{idx}]: team={getattr(td,'team',None)} id={getattr(td,'team_id',None) or getattr(td,'id',None)} tag={getattr(td,'team_tag',None) or getattr(td,'tag',None)} name={getattr(td,'team_name',None) or getattr(td,'name',None)}"
+                                                )
+                                            except Exception:
+                                                pass
                                 except Exception:
                                     pass
                                 return False
