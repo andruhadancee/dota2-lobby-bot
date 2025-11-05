@@ -409,17 +409,36 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                                     d_tid = getattr(d_obj, 'team_id', None) or getattr(d_obj, 'id', None)
                                     candidates.append((r_tid, d_tid))
                                 # 3) team_details (официальное место хранения команд в лобби)
+                                # team_details - это массив, где индекс 0 = Radiant, индекс 1 = Dire
                                 try:
                                     details = getattr(lobby_obj, 'team_details', None)
-                                    radiant_ok, dire_ok = False, False
                                     if details:
-                                        for td in list(details):
+                                        details_list = list(details)
+                                        # Проверяем оба элемента массива по индексу
+                                        if len(details_list) >= 2:
+                                            # Radiant (индекс 0)
+                                            td_radiant = details_list[0]
+                                            radiant_id = getattr(td_radiant, 'team_id', None) or getattr(td_radiant, 'id', None)
+                                            radiant_tag = getattr(td_radiant, 'team_tag', None) or getattr(td_radiant, 'tag', None)
+                                            radiant_ok = (radiant_id is not None and radiant_id != 0) or (radiant_tag is not None and radiant_tag != '')
+                                            
+                                            # Dire (индекс 1)
+                                            td_dire = details_list[1]
+                                            dire_id = getattr(td_dire, 'team_id', None) or getattr(td_dire, 'id', None)
+                                            dire_tag = getattr(td_dire, 'team_tag', None) or getattr(td_dire, 'tag', None)
+                                            dire_ok = (dire_id is not None and dire_id != 0) or (dire_tag is not None and dire_tag != '')
+                                            
+                                            if radiant_ok and dire_ok:
+                                                return True
+                                        # Альтернативная проверка: если team_details содержит элементы с team=0 и team=1
+                                        radiant_ok, dire_ok = False, False
+                                        for td in details_list:
                                             t_side = getattr(td, 'team', None)
-                                            t_id = getattr(td, 'team_id', 0) or getattr(td, 'id', 0)
-                                            t_tag = getattr(td, 'team_tag', '') or getattr(td, 'tag', '')
-                                            if t_side == 0 and (t_id or t_tag):
+                                            t_id = getattr(td, 'team_id', None) or getattr(td, 'id', None)
+                                            t_tag = getattr(td, 'team_tag', None) or getattr(td, 'tag', None)
+                                            if t_side == 0 and ((t_id is not None and t_id != 0) or (t_tag is not None and t_tag != '')):
                                                 radiant_ok = True
-                                            if t_side == 1 and (t_id or t_tag):
+                                            if t_side == 1 and ((t_id is not None and t_id != 0) or (t_tag is not None and t_tag != '')):
                                                 dire_ok = True
                                         if radiant_ok and dire_ok:
                                             return True
