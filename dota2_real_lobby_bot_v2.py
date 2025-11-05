@@ -386,6 +386,56 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                         except Exception as cm_error:
                             local_logger.warning(f"[{username}] ⚠️ Ошибка применения cm_pick: {cm_error}")
                     
+                    # Для 1v1 по требованию: подождать 2 минуты после появления обоих игроков
+                    if is_1v1:
+                        local_logger.info(f"[{username}] ⏳ Обнаружены 1v1 слоты (1/1). Ждём 2 минуты перед стартом...")
+                        for _ in range(120):
+                            gevent.sleep(1)
+                            # во время ожидания убеждаемся, что стороны всё ещё заняты по 1 игроку
+                            if not (hasattr(dota, 'lobby') and dota.lobby and hasattr(dota.lobby, 'all_members')):
+                                break
+                            r_now = sum(1 for m in dota.lobby.all_members if m.team == 0)
+                            d_now = sum(1 for m in dota.lobby.all_members if m.team == 1)
+                            if r_now != required_radiant or d_now != required_dire:
+                                local_logger.info(f"[{username}] ⛔ Изменение состава (Radiant={r_now}, Dire={d_now}) — отменяем старт.")
+                                break
+                        else:
+                            # ожидание прошло успешно без break
+                            pass
+
+                        # Перепроверка перед запуском
+                        if not (hasattr(dota, 'lobby') and dota.lobby and hasattr(dota.lobby, 'all_members')):
+                            local_logger.warning(f"[{username}] ⚠️ Лобби недоступно перед запуском")
+                            continue
+                        r_now = sum(1 for m in dota.lobby.all_members if m.team == 0)
+                        d_now = sum(1 for m in dota.lobby.all_members if m.team == 1)
+                        if r_now != required_radiant or d_now != required_dire:
+                            local_logger.info(f"[{username}] ⏹️ Состав изменился перед стартом (Radiant={r_now}, Dire={d_now}). Ждём дальше…")
+                            continue
+
+                        # Доп.проверка: у обеих сторон должна быть назначена команда (team_id != 0)
+                        def teams_assigned(lobby_obj):
+                            try:
+                                rid = getattr(lobby_obj, 'team_id_radiant', None) or getattr(lobby_obj, 'radiant_team_id', None)
+                                did = getattr(lobby_obj, 'team_id_dire', None) or getattr(lobby_obj, 'dire_team_id', None)
+                                if isinstance(rid, int) and rid > 0 and isinstance(did, int) and did > 0:
+                                    return True
+                                has_r, has_d = False, False
+                                for mem in getattr(lobby_obj, 'all_members', []) or []:
+                                    t = getattr(mem, 'team', None)
+                                    tid = getattr(mem, 'team_id', 0) or getattr(mem, 'teamid', 0)
+                                    if t == 0 and tid:
+                                        has_r = True
+                                    if t == 1 and tid:
+                                        has_d = True
+                                return has_r and has_d
+                            except Exception:
+                                return False
+
+                        if not teams_assigned(dota.lobby):
+                            local_logger.info(f"[{username}] ⚠️ Команды не назначены для обеих сторон — ждём назначения и проверим снова…")
+                            continue
+
                     gevent.sleep(2)
                     local_logger.info(f"[{username}] 🚀 ЗАПУСКАЕМ ИГРУ...")
                     dota.launch_practice_lobby()
