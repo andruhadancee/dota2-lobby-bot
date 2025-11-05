@@ -386,33 +386,8 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                         except Exception as cm_error:
                             local_logger.warning(f"[{username}] ⚠️ Ошибка применения cm_pick: {cm_error}")
                     
-                    # Для 1v1 по требованию: подождать 2 минуты после появления обоих игроков
+                    # Для 1v1: без задержки. Запускаем сразу, если назначены команды и сохраняется состав 1/1
                     if is_1v1:
-                        local_logger.info(f"[{username}] ⏳ Обнаружены 1v1 слоты (1/1). Ждём 2 минуты перед стартом...")
-                        for _ in range(120):
-                            gevent.sleep(1)
-                            # во время ожидания убеждаемся, что стороны всё ещё заняты по 1 игроку
-                            if not (hasattr(dota, 'lobby') and dota.lobby and hasattr(dota.lobby, 'all_members')):
-                                break
-                            r_now = sum(1 for m in dota.lobby.all_members if m.team == 0)
-                            d_now = sum(1 for m in dota.lobby.all_members if m.team == 1)
-                            if r_now != required_radiant or d_now != required_dire:
-                                local_logger.info(f"[{username}] ⛔ Изменение состава (Radiant={r_now}, Dire={d_now}) — отменяем старт.")
-                                break
-                        else:
-                            # ожидание прошло успешно без break
-                            pass
-
-                        # Перепроверка перед запуском
-                        if not (hasattr(dota, 'lobby') and dota.lobby and hasattr(dota.lobby, 'all_members')):
-                            local_logger.warning(f"[{username}] ⚠️ Лобби недоступно перед запуском")
-                            continue
-                        r_now = sum(1 for m in dota.lobby.all_members if m.team == 0)
-                        d_now = sum(1 for m in dota.lobby.all_members if m.team == 1)
-                        if r_now != required_radiant or d_now != required_dire:
-                            local_logger.info(f"[{username}] ⏹️ Состав изменился перед стартом (Radiant={r_now}, Dire={d_now}). Ждём дальше…")
-                            continue
-
                         # Доп.проверка: у обеих сторон должна быть назначена команда (team_id != 0)
                         def teams_assigned(lobby_obj):
                             try:
@@ -432,8 +407,14 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                             except Exception:
                                 return False
 
+                        if not (hasattr(dota, 'lobby') and dota.lobby and hasattr(dota.lobby, 'all_members')):
+                            continue
+                        r_now = sum(1 for m in dota.lobby.all_members if m.team == 0)
+                        d_now = sum(1 for m in dota.lobby.all_members if m.team == 1)
+                        if r_now != required_radiant or d_now != required_dire:
+                            continue
                         if not teams_assigned(dota.lobby):
-                            local_logger.info(f"[{username}] ⚠️ Команды не назначены для обеих сторон — ждём назначения и проверим снова…")
+                            local_logger.info(f"[{username}] ⚠️ Команды не назначены для обеих сторон — не запускаем.")
                             continue
 
                     gevent.sleep(2)
