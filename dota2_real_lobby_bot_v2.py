@@ -253,19 +253,15 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
             
             local_logger.info(f"[{username}] ✅ Лобби полностью настроено!")
             
-            # ВАЖНО: Ждём, пока лобби станет готовым и видимым в поиске
-            # state = 0 означает LOBBY_STATE_READY (готово)
-            # state = 2 означает LOBBY_STATE_LOADING (загрузка)
-            local_logger.info(f"[{username}] ⏳ Ожидание готовности лобби для отображения в поиске...")
-            for wait_attempt in range(10):  # Ждём до 10 секунд
-                if hasattr(dota, 'lobby') and dota.lobby:
-                    lobby_state = dota.lobby.state if hasattr(dota.lobby, 'state') else None
-                    if lobby_state == 0:  # LOBBY_STATE_READY
-                        local_logger.info(f"[{username}] ✅ Лобби готово (state = 0), видимо в поиске!")
-                        break
-                    else:
-                        local_logger.info(f"[{username}] ⏳ Лобби ещё не готово (state = {lobby_state}), ждём...")
-                gevent.sleep(1)
+            # ВАЖНО: Для турнирных лобби с League ID лобби может быть видимо в поиске
+            # даже в состоянии LOADING (state = 2). Даём небольшую задержку для синхронизации.
+            local_logger.info(f"[{username}] ⏳ Небольшая задержка для синхронизации лобби...")
+            gevent.sleep(2)  # Даём время на синхронизацию лобби с сервером
+            
+            # Проверяем состояние лобби для логирования
+            if hasattr(dota, 'lobby') and dota.lobby:
+                lobby_state = dota.lobby.state if hasattr(dota.lobby, 'state') else None
+                local_logger.info(f"[{username}] 📡 Состояние лобби после настройки: state = {lobby_state}")
             
             result_queue.put({
                 'success': True,
@@ -561,20 +557,11 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                         except Exception as cm_error:
                             local_logger.warning(f"[{username}] ⚠️ Ошибка применения cm_pick: {cm_error}")
                         
-                        # ВАЖНО: Проверяем, что лобби готово (state = 0) перед запуском draft
-                        # чтобы убедиться, что оно видимо в поиске
+                        # ВАЖНО: Для турнирных лобби с League ID лобби может быть видимо в поиске
+                        # даже в состоянии LOADING (state = 2). Проверяем состояние для логирования.
                         if hasattr(dota, 'lobby') and dota.lobby:
                             lobby_state = dota.lobby.state if hasattr(dota.lobby, 'state') else None
-                            if lobby_state != 0:  # Не READY
-                                local_logger.warning(f"[{username}] ⚠️ Лобби не готово (state = {lobby_state}), ждём...")
-                                # Ждём, пока лобби станет готовым
-                                for wait_attempt in range(5):  # Ждём до 5 секунд
-                                    gevent.sleep(1)
-                                    if hasattr(dota, 'lobby') and dota.lobby:
-                                        lobby_state = dota.lobby.state if hasattr(dota.lobby, 'state') else None
-                                        if lobby_state == 0:  # LOBBY_STATE_READY
-                                            local_logger.info(f"[{username}] ✅ Лобби готово (state = 0), запускаем draft!")
-                                            break
+                            local_logger.info(f"[{username}] 📡 Состояние лобби перед запуском draft: state = {lobby_state}")
                         
                         # Запускаем выбор сторон/героев (draft фазу)
                         # Для режимов с выбором launch_practice_lobby() запускает draft, а не игру
