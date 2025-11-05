@@ -1,8 +1,29 @@
 @echo off
 chcp 65001 >nul
-cd /d "C:\Users\lisag\Desktop\бот для создания лобби"
-git add dota2_real_lobby_bot_v2.py
-git commit -m "fix: use gevent.event.Event + remove captain check (not needed in Dota 2)"
-git push
-pause
+setlocal enabledelayedexpansion
 
+REM Go to repository root (directory of this script)
+cd /d "%~dp0"
+
+REM Commit message (all args or default with date/time)
+set MSG=%*
+if "%MSG%"=="" set MSG=chore: update %DATE% %TIME%
+
+echo [INFO] Staging changes...
+git add -A
+
+git diff --cached --quiet
+if %errorlevel%==0 (
+  echo [INFO] No changes to commit.
+  goto :end
+)
+
+echo [INFO] Committing: %MSG%
+git commit -m "%MSG%"
+
+echo [INFO] Pushing...
+git push
+
+:end
+echo [OK] Done.
+pause
