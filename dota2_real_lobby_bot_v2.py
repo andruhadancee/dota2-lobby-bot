@@ -481,66 +481,16 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
 
                     gevent.sleep(2)
                     
-                    # Режимы с выбором сторон/героев (только CM/CD):
-                    # Для 1v1 Solo Mid и Mid Only выбор сторон/героев происходит автоматически внутри игры,
-                    # не нужно запускать draft отдельно - просто запускаем игру
-                    modes_with_draft = ['Captains Mode', 'Captains Draft']
+                    # Режимы с выбором сторон/героев:
+                    # - CM/CD: нужен cm_pick: 1 для подброса монетки
+                    # - 1v1 Solo Mid и Mid Only: тоже нужен выбор сторон/героев
+                    modes_with_draft = ['Captains Mode', 'Captains Draft', '1v1 Solo Mid', 'Mid Only']
                     needs_draft = mode in modes_with_draft
                     
                     if needs_draft:
                         local_logger.info(f"[{username}] 🎲 Команды назначены! НАЧИНАЕМ ВЫБОР СТОРОН/ГЕРОЕВ (draft phase)...")
                         local_logger.info(f"[{username}] 📡 Для режима {mode} запускаем выбор сторон/героев...")
-                        
-                        # Применяем настройки для режимов с выбором (если нужно)
-                        if mode in ['Captains Mode', 'Captains Draft']:
-                            local_logger.info(f"[{username}] 🪙 Применяем настройки для подброса монетки (cm_pick: 1)...")
-                            try:
-                                server_mapping = {
-                                    'Stockholm': 8,
-                                    'Europe West': EServerRegion.Europe,
-                                    'Russia': EServerRegion.Europe,
-                                    'US East': EServerRegion.USEast,
-                                    'US West': EServerRegion.USWest,
-                                }
-                                mode_mapping = {
-                                    'Captains Mode': DOTA_GameMode.DOTA_GAMEMODE_CM,
-                                    'All Pick': DOTA_GameMode.DOTA_GAMEMODE_AP,
-                                    'Captains Draft': DOTA_GameMode.DOTA_GAMEMODE_CD,
-                                    'Mid Only': DOTA_GameMode.DOTA_GAMEMODE_MO,
-                                    '1v1 Solo Mid': DOTA_GameMode.DOTA_GAMEMODE_1V1MID,
-                                    'Random Draft': DOTA_GameMode.DOTA_GAMEMODE_RD,
-                                    'Single Draft': DOTA_GameMode.DOTA_GAMEMODE_SD,
-                                }
-                                series_mapping = {
-                                    'bo1': 0,
-                                    'bo2': 1,
-                                    'bo3': 2,
-                                    'bo5': 3,
-                                }
-                                server_region = server_mapping.get(server, EServerRegion.Europe)
-                                game_mode = mode_mapping.get(mode, DOTA_GameMode.DOTA_GAMEMODE_CM)
-                                series_value = series_mapping.get(series_type.lower(), 0)
-                                
-                                cm_options = {
-                                    'game_name': lobby_name,
-                                    'pass_key': lobby_password,
-                                    'server_region': server_region,
-                                    'game_mode': game_mode,
-                                    'series_type': series_value,
-                                    'allow_spectating': False,
-                                    'allow_cheats': False,
-                                    'dota_tv_delay': 2,
-                                    'fill_with_bots': False,
-                                    'cm_pick': 1,  # КРИТИЧНО: подброс монетки для выбора стороны
-                                    'radiant_series_wins': 0,
-                                    'dire_series_wins': 0,
-                                    'leagueid': 18390,
-                                }
-                                dota.config_practice_lobby(options=cm_options)
-                                local_logger.info(f"[{username}] ✅ Настройки cm_pick: 1 применены")
-                                gevent.sleep(1)  # Даём время на применение настроек
-                            except Exception as cm_error:
-                                local_logger.warning(f"[{username}] ⚠️ Ошибка применения cm_pick: {cm_error}")
+                        local_logger.info(f"[{username}] 💡 Настройки (cm_pick: 1) уже применены при создании лобби")
                         
                         # Запускаем выбор сторон/героев (draft фазу)
                         # Для режимов с выбором launch_practice_lobby() запускает draft, а не игру
