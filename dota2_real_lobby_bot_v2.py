@@ -323,7 +323,7 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                         result_queue.put({'success': False, 'lobby_closed': True})
                         local_logger.info(f"[{username}] ⏳ Ожидание обработки сообщения о закрытии (15 секунд)...")
                         gevent.sleep(15)
-                    break
+                        break
                     else:
                         # Игра была запущена, лобби закрылось - игра завершена
                         break
