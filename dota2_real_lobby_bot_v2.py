@@ -390,20 +390,60 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                     if is_1v1:
                         # Доп.проверка: у обеих сторон должна быть назначена команда (team_id != 0)
                         def teams_assigned(lobby_obj):
+                            """Пытаемся определить назначение команд максимально широко.
+                            Возвращает True, если у Radiant и Dire есть ненулевые team_id/объекты команды.
+                            """
                             try:
-                                rid = getattr(lobby_obj, 'team_id_radiant', None) or getattr(lobby_obj, 'radiant_team_id', None)
-                                did = getattr(lobby_obj, 'team_id_dire', None) or getattr(lobby_obj, 'dire_team_id', None)
-                                if isinstance(rid, int) and rid > 0 and isinstance(did, int) and did > 0:
-                                    return True
+                                # 1) Прямые поля ID на лобби
+                                candidates = [
+                                    (
+                                        getattr(lobby_obj, 'team_id_radiant', None) or getattr(lobby_obj, 'radiant_team_id', None),
+                                        getattr(lobby_obj, 'team_id_dire', None) or getattr(lobby_obj, 'dire_team_id', None),
+                                    )
+                                ]
+                                # 2) Объекты команд (radiant_team/dire_team) с полями team_id/id
+                                r_obj = getattr(lobby_obj, 'radiant_team', None)
+                                d_obj = getattr(lobby_obj, 'dire_team', None)
+                                if r_obj or d_obj:
+                                    r_tid = getattr(r_obj, 'team_id', None) or getattr(r_obj, 'id', None)
+                                    d_tid = getattr(d_obj, 'team_id', None) or getattr(d_obj, 'id', None)
+                                    candidates.append((r_tid, d_tid))
+                                # 3) По членам лобби (team/tag/id)
                                 has_r, has_d = False, False
                                 for mem in getattr(lobby_obj, 'all_members', []) or []:
                                     t = getattr(mem, 'team', None)
-                                    tid = getattr(mem, 'team_id', 0) or getattr(mem, 'teamid', 0)
-                                    if t == 0 and tid:
+                                    # встречаются разные варианты имён атрибутов
+                                    tid = (
+                                        getattr(mem, 'team_id', 0)
+                                        or getattr(mem, 'teamid', 0)
+                                        or getattr(mem, 'teamId', 0)
+                                    )
+                                    tag = getattr(mem, 'team_tag', None) or getattr(mem, 'teamTag', None)
+                                    if t == 0 and (tid or tag):
                                         has_r = True
-                                    if t == 1 and tid:
+                                    if t == 1 and (tid or tag):
                                         has_d = True
-                                return has_r and has_d
+                                if has_r and has_d:
+                                    return True
+                                # Проверяем кандидатов
+                                for r_tid, d_tid in candidates:
+                                    if (isinstance(r_tid, int) and r_tid > 0) and (isinstance(d_tid, int) and d_tid > 0):
+                                        return True
+                                # Если не смогли определить — выводим диагностический лог один раз в 5 сек
+                                try:
+                                    local_logger.info(
+                                        f"[{username}] 🔍 Нет явных team_id. Атрибуты lobby с 'team': "
+                                    )
+                                    for name in dir(lobby_obj):
+                                        if 'team' in name.lower():
+                                            val = getattr(lobby_obj, name)
+                                            if isinstance(val, (int, str)):
+                                                local_logger.info(f"    lobby.{name} = {val}")
+                                            else:
+                                                local_logger.info(f"    lobby.{name} = {type(val).__name__}")
+                                except Exception:
+                                    pass
+                                return False
                             except Exception:
                                 return False
 
