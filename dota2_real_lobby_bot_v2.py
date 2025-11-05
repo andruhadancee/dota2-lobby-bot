@@ -252,17 +252,6 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                 local_logger.warning(f"[{username}] Ошибка входа: {e}")
             
             local_logger.info(f"[{username}] ✅ Лобби полностью настроено!")
-            
-            # ВАЖНО: Для турнирных лобби с League ID лобби может быть видимо в поиске
-            # даже в состоянии LOADING (state = 2). Даём небольшую задержку для синхронизации.
-            local_logger.info(f"[{username}] ⏳ Небольшая задержка для синхронизации лобби...")
-            gevent.sleep(2)  # Даём время на синхронизацию лобби с сервером
-            
-            # Проверяем состояние лобби для логирования
-            if hasattr(dota, 'lobby') and dota.lobby:
-                lobby_state = dota.lobby.state if hasattr(dota.lobby, 'state') else None
-                local_logger.info(f"[{username}] 📡 Состояние лобби после настройки: state = {lobby_state}")
-            
             result_queue.put({
                 'success': True,
                 'lobby_name': lobby_name,
@@ -291,7 +280,6 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
             local_logger.info(f"[{username}] 🔄 Лобби активно, автостарт при 10 игроках (5 vs 5)...")
         
         game_started = False
-        draft_started = False  # Флаг запуска draft фазы
         players_warned = False  # Флаг предупреждения об игроках
         
         local_logger.info(f"[{username}] 🔄 НАЧИНАЕМ ЦИКЛ ПРОВЕРКИ ИГРОКОВ...")
@@ -311,13 +299,7 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                 lobby_exists = dota.lobby is not None
                 
                 if not lobby_exists:
-                    # Если draft был запущен, а лобби закрылось - значит игра началась
-                    if draft_started and not game_started:
-                        local_logger.info(f"[{username}] ✅ Draft завершён, игра началась (лобби закрылось для перехода в игру)!")
-                        game_started = True
-                        # Выходим из цикла проверки игроков, переходим к ожиданию завершения игры
-                        break
-                    elif not game_started:
+                    if not game_started:
                         local_logger.warning(f"[{username}] ⚠️ dota.lobby = None! Лобби закрылось.")
                         result_queue.put({'success': False, 'lobby_closed': True})
                         local_logger.info(f"[{username}] ⏳ Ожидание обработки сообщения о закрытии (15 секунд)...")
@@ -329,17 +311,11 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                 
                 # Используем all_members вместо members
                 if not hasattr(dota.lobby, 'all_members'):
-                    # Если draft запущен, продолжаем ждать
-                    if draft_started:
-                        continue
                     continue
                 
                 members_count = len(dota.lobby.all_members)
                 
                 if members_count == 0:
-                    # Если draft запущен, продолжаем ждать
-                    if draft_started:
-                        continue
                     continue
                 
                 # Есть игроки! Проверяем их команды
@@ -348,18 +324,6 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
                 # Подсчитываем игроков в командах
                 radiant_players = sum(1 for m in lobby.all_members if m.team == 0)  # 0 = Radiant
                 dire_players = sum(1 for m in lobby.all_members if m.team == 1)     # 1 = Dire
-                
-                # Если draft уже запущен, ждём начала игры
-                if draft_started:
-                    # Проверяем, началась ли игра (после завершения draft)
-                    # Для режимов с draft после завершения выбора игра начинается автоматически
-                    # Проверяем состояние лобби для диагностики
-                    if i % 3 == 0:  # Каждые ~9 секунд
-                        local_logger.info(f"[{username}] ⏳ Ожидание завершения выбора сторон/героев... (проверка {i + 1}/700)")
-                        if hasattr(dota, 'lobby') and dota.lobby:
-                            local_logger.info(f"[{username}] 📡 Состояние лобби во время draft: state = {dota.lobby.state if hasattr(dota.lobby, 'state') else 'N/A'}")
-                            local_logger.info(f"[{username}] 📡 Игроков в лобби: {len(dota.lobby.all_members) if hasattr(dota.lobby, 'all_members') else 'N/A'}")
-                    continue
                 
                 # Проверяем готовность в зависимости от режима
                 if radiant_players == required_radiant and dire_players == required_dire:
@@ -492,133 +456,15 @@ def steam_worker_process(username: str, password: str, lobby_name: str,
 
                     gevent.sleep(2)
                     
-                    # Режимы с выбором сторон/героев:
-                    # - CM/CD: нужен cm_pick: 1 для подброса монетки
-                    # - 1v1 Solo Mid и Mid Only: тоже нужен выбор сторон/героев
-                    modes_with_draft = ['Captains Mode', 'Captains Draft', '1v1 Solo Mid', 'Mid Only']
-                    needs_draft = mode in modes_with_draft
+                    # Для всех режимов запускаем игру сразу после назначения команд
+                    local_logger.info(f"[{username}] 🚀 ЗАПУСКАЕМ ИГРУ...")
+                    dota.launch_practice_lobby()
+                    gevent.sleep(5)  # Даём время на запуск
                     
-                    if needs_draft:
-                        local_logger.info(f"[{username}] 🎲 Команды назначены! НАЧИНАЕМ ВЫБОР СТОРОН/ГЕРОЕВ (draft phase)...")
-                        local_logger.info(f"[{username}] 📡 Для режима {mode} запускаем выбор сторон/героев...")
-                        
-                        # ВАЖНО: Применяем настройки с cm_pick: 1 перед запуском draft
-                        # чтобы подброс монетки произошёл при запуске draft
-                        local_logger.info(f"[{username}] 🪙 Применяем настройки для подброса монетки (cm_pick: 1)...")
-                        try:
-                            server_mapping = {
-                                'Stockholm': 8,
-                                'Europe West': EServerRegion.Europe,
-                                'Russia': EServerRegion.Europe,
-                                'US East': EServerRegion.USEast,
-                                'US West': EServerRegion.USWest,
-                            }
-                            mode_mapping = {
-                                'Captains Mode': DOTA_GameMode.DOTA_GAMEMODE_CM,
-                                'All Pick': DOTA_GameMode.DOTA_GAMEMODE_AP,
-                                'Captains Draft': DOTA_GameMode.DOTA_GAMEMODE_CD,
-                                'Mid Only': DOTA_GameMode.DOTA_GAMEMODE_MO,
-                                '1v1 Solo Mid': DOTA_GameMode.DOTA_GAMEMODE_1V1MID,
-                                'Random Draft': DOTA_GameMode.DOTA_GAMEMODE_RD,
-                                'Single Draft': DOTA_GameMode.DOTA_GAMEMODE_SD,
-                            }
-                            series_mapping = {
-                                'bo1': 0,
-                                'bo2': 1,
-                                'bo3': 2,
-                                'bo5': 3,
-                            }
-                            server_region = server_mapping.get(server, EServerRegion.Europe)
-                            game_mode = mode_mapping.get(mode, DOTA_GameMode.DOTA_GAMEMODE_CM)
-                            series_value = series_mapping.get(series_type.lower(), 0)
-                            
-                            draft_options = {
-                                'game_name': lobby_name,
-                                'pass_key': lobby_password,
-                                'server_region': server_region,
-                                'game_mode': game_mode,
-                                'series_type': series_value,
-                                'allow_spectating': False,
-                                'allow_cheats': False,
-                                'dota_tv_delay': 2,
-                                'fill_with_bots': False,
-                                'cm_pick': 1,  # КРИТИЧНО: подброс монетки для выбора стороны
-                                'radiant_series_wins': 0,
-                                'dire_series_wins': 0,
-                                'leagueid': 18390,
-                            }
-                            dota.config_practice_lobby(options=draft_options)
-                            local_logger.info(f"[{username}] ✅ Настройки cm_pick: 1 применены перед запуском draft")
-                            gevent.sleep(2)  # Даём время на применение настроек (увеличено до 2 секунд)
-                            
-                            # Дополнительная проверка: убеждаемся, что настройки применились
-                            if hasattr(dota, 'lobby') and dota.lobby:
-                                local_logger.info(f"[{username}] 📡 Проверка лобби после применения настроек: state = {dota.lobby.state if hasattr(dota.lobby, 'state') else 'N/A'}")
-                        except Exception as cm_error:
-                            local_logger.warning(f"[{username}] ⚠️ Ошибка применения cm_pick: {cm_error}")
-                        
-                        # ВАЖНО: Для турнирных лобби с League ID лобби может быть видимо в поиске
-                        # даже в состоянии LOADING (state = 2). Проверяем состояние для логирования.
-                        if hasattr(dota, 'lobby') and dota.lobby:
-                            lobby_state = dota.lobby.state if hasattr(dota.lobby, 'state') else None
-                            local_logger.info(f"[{username}] 📡 Состояние лобби перед запуском draft: state = {lobby_state}")
-                        
-                        # Запускаем выбор сторон/героев (draft фазу)
-                        # Для режимов с выбором launch_practice_lobby() запускает draft, а не игру
-                        local_logger.info(f"[{username}] 🚀 Запускаем выбор сторон/героев (draft phase)...")
-                        dota.launch_practice_lobby()
-                        gevent.sleep(2)  # Короткая задержка для отправки сообщения
-                        
-                        # ВАЖНО: После launch_practice_lobby() для режима с cm_pick: 1
-                        # сервер должен автоматически запустить подброс монетки
-                        # Но для режима 1v1 Solo Mid может потребоваться дополнительная отправка сообщения
-                        # Попробуем отправить SelectionPriorityChoiceRequest через низкоуровневый API
-                        try:
-                            # Пытаемся отправить SelectionPriorityChoiceRequest (k_EMsgSelectionPriorityChoiceRequest = 8241)
-                            # через низкоуровневый API библиотеки dota2
-                            if hasattr(dota, 'client') and hasattr(dota.client, 'send'):
-                                local_logger.info(f"[{username}] 🪙 Отправляем запрос выбора приоритета (SelectionPriorityChoiceRequest)...")
-                                # Попробуем отправить сообщение через GC
-                                # Формат: CMsgSelectionPriorityChoiceRequest
-                                # Но нам нужно знать правильный формат сообщения
-                                # Пока просто логируем попытку
-                                local_logger.info(f"[{username}] ⚠️ Низкоуровневая отправка SelectionPriorityChoiceRequest не реализована - используем автоматический режим")
-                        except Exception as send_error:
-                            local_logger.warning(f"[{username}] ⚠️ Ошибка при отправке SelectionPriorityChoiceRequest: {send_error}")
-                        
-                        gevent.sleep(2)  # Дополнительная задержка для обработки подброса монетки
-                        local_logger.info(f"[{username}] 🪙 Ожидаем подброс монетки...")
-                        
-                        # Проверяем, что лобби всё ещё существует после launch_practice_lobby()
-                        if dota.lobby is None:
-                            local_logger.warning(f"[{username}] ⚠️ Лобби закрылось после launch_practice_lobby()! Возможно, игра началась сразу.")
-                            # Если лобби закрылось, значит игра началась (для некоторых режимов)
-                            game_started = True
-                            break
-                        
-                        draft_started = True  # Помечаем, что draft запущен
-                        local_logger.info(f"[{username}] ✅ Выбор сторон/героев запущен! Игроки выбирают...")
-                        local_logger.info(f"[{username}] 📡 Состояние лобби после запуска draft: state = {dota.lobby.state if hasattr(dota.lobby, 'state') else 'N/A'}")
-                        local_logger.info(f"[{username}] ⏳ Ожидание завершения выбора сторон/героев...")
-                        local_logger.info(f"[{username}] 💡 После завершения выбора игра начнётся автоматически!")
-                        
-                        # После launch_practice_lobby() начинается выбор сторон/героев,
-                        # а после завершения выбора игра начинается автоматически
-                        # НЕ помечаем игру как запущенную - продолжаем цикл проверки
-                        # Бот будет отслеживать начало игры в основном цикле
-                        # После завершения draft игра начнётся автоматически, и мы это зафиксируем
-                        # Продолжаем цикл проверки, чтобы отслеживать начало игры
-                        continue  # Продолжаем цикл проверки, не помечая игру как запущенную
-                    else:
-                        # Для режимов без выбора (All Pick, Random Draft и т.д.) запускаем игру сразу
-                        local_logger.info(f"[{username}] 🚀 ЗАПУСКАЕМ ИГРУ...")
-                        dota.launch_practice_lobby()
-                        gevent.sleep(5)  # Даём время на запуск
-                        
-                        local_logger.info(f"[{username}] 🎮🎮🎮 ИГРА ЗАПУЩЕНА! Бот загружается как наблюдатель!")
-                        
-                        game_started = True
-                        break
+                    local_logger.info(f"[{username}] 🎮🎮🎮 ИГРА ЗАПУЩЕНА! Бот загружается как наблюдатель!")
+                    
+                    game_started = True
+                    break
                         
             except Exception as check_error:
                 local_logger.error(f"[{username}] ❌ ОШИБКА при проверке игроков: {check_error}", exc_info=True)
